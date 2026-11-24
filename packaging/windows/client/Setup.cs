@@ -136,14 +136,8 @@ namespace StudioWrightClient
             if (!SelfTest()["ok"]) throw new InvalidOperationException("安装包内容不完整。");
             if (Directory.Exists(AppDir) || File.Exists(AppDir))
                 throw new InvalidOperationException("已存在操作端目录，未覆盖。请打开已有操作端。");
-            bool existingNative = false;
-            using (var key = Registry.CurrentUser.OpenSubKey(@"Software\Google\Chrome\NativeMessagingHosts\com.studiowright.bridge"))
-                existingNative = key != null;
-            bool installNative = !existingNative &&
-                !File.Exists(Path.Combine(NativeDir, "manifest.json")) &&
-                !File.Exists(Path.Combine(NativeDir, "host.cmd"));
             ExtractPayload(AppDir);
-            if (installNative) RegisterNative();
+            RegisterNative();
             TryShortcut();
             return ApplyDesktopOption(desktopShortcut,
                 Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), InstalledExe);
