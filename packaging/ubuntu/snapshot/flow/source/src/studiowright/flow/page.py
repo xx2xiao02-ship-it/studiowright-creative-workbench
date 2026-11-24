@@ -50,6 +50,8 @@ def record_recovery(action, **detail):
     record(action,**detail)
 
 FLOW_ROOT = "https://flow.google.com/"
+# UK exit throughput can make a 7.7 MB clip take about 50 s; leave room for slower links.
+DOWNLOAD_TIMEOUT_MS = 180000
 IMAGE_RPC = "ogiZ0b"
 #: The project's media list, loaded with the project page.
 LIST_RPC = "Zzl0ze"
@@ -506,9 +508,7 @@ class FlowPage:
             if self._foreground_lease and self._foreground_lease.active:
                 await self.dismiss_flow_changelog()
             await self._leave_agent_mode(timeout_s)
-            await self.page.locator(s.READY).first.wait_for(
-                state="visible", timeout=timeout_s * 1000
-            )
+            await self._wait_ready(timeout_s)
         except Exception as exc:
             raise FlowError(
                 f"the Flow project did not become ready ({self.page.url}); "
@@ -541,13 +541,29 @@ class FlowPage:
         await dialog.wait_for(state='hidden', timeout=5000)
         return True
 
+    async def _ready_visible(self) -> bool:
+        """The classic settings trigger or the classic composer is enough here."""
+        for selector in (s.READY, s.COMPOSER):
+            locator = self.page.locator(selector)
+            for index in range(await locator.count()):
+                if await locator.nth(index).is_visible():
+                    return True
+        return False
+
+    async def _wait_ready(self, timeout_s: float) -> None:
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if await self._ready_visible():
+                return
+            await self.page.wait_for_timeout(250)
+        raise TimeoutError('flow_ready_timeout')
+
     async def _leave_agent_mode(self, timeout_s: float) -> None:
         """Close the agent panel and leave agent mode, where the account has them."""
-        ready = self.page.locator(s.READY).first
         for _ in range(int(timeout_s * 2)):
             if self._foreground_lease and self._foreground_lease.active:
                 await self.dismiss_flow_changelog()
-            if await ready.is_visible():
+            if await self._ready_visible():
                 return
             for selector in (s.AGENT_PANEL_CLOSE, s.AGENT_CHIP_ON):
                 button = self.page.locator(selector).first
@@ -1391,7 +1407,7 @@ class FlowPage:
         for attempt in range(3):
             response = None
             try:
-                response = await self.page.context.request.get(url,timeout=30000)
+                response = await self.page.context.request.get(url,timeout=DOWNLOAD_TIMEOUT_MS)
                 if response.status in (401,403,410):
                     raise DownloadAddressExpired('original_download_address_expired')
                 if response.status in (408,429,500,502,503,504):
