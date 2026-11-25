@@ -168,6 +168,7 @@ function renderGeminiAttempts(attempts) {
   const statuses = {running:'处理中', completed:'成功', failed:'失败', unknown:'结果待核对'};
   const reasons = {
     temporary_cli_launch_failure:'调用程序启动遇到临时故障',
+    protocol_timeout_2:'建立 Gemini 会话超时，图片尚未发送',
     authorization_not_ready:'账号授权未就绪',
     authorization_required_unsent:'原账号需要重新授权',
     execution_interrupted:'调用程序执行中断',

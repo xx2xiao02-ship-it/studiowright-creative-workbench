@@ -583,6 +583,7 @@ print(result["request_id"], result["model"])
               <div class="api-endpoint"><b class="api-method-post">POST</b><code>/api/real-pool/uploads/{请求编号}/{序号}/{扩展名}</code><span>传图片原始字节。序号从 0 开始；返回 index、extension、sha256。</span></div>
               <div class="api-endpoint"><b class="api-method-post">POST</b><code>/api/real-pool/image-analysis</code><span>传 account: "auto"、prompt、attachments（上传回执数组），请求头沿用上传路径中的编号。返回 request_id、status 和 conversation_id。</span></div>
               <p>识图默认使用 HY 中档，自动选账号时沿用发送前的 Flash 保底规则。通过 <code>fallback_model: false</code> 限制为只用 HY。</p>
+              <p>识图或视频抽帧如果在建立 Gemini 会话时超时，且确认图片尚未发送，会用原账号和原请求编号再试一次。<code>retry_policy: "never"</code> 会关闭这次重试。</p>
               <p>可传 1～4 张 JPG、PNG、WebP，单张最多 8 MiB、合计 16 MiB、单张不超过 2400 万像素。只校验时用 <code>POST /api/real-pool/image-analysis-validate</code>，参数相同，返回 <code>valid</code>、<code>submitted: false</code> 和 <code>image_count</code>。</p>
               <div class="api-code-head"><span>复制识图请求 · 默认只校验</span><button type="button" data-copy-code="api-code-gemini-vision">复制代码</button></div><pre class="api-code" tabindex="0"><code id="api-code-gemini-vision">files = [Path("产品.png"), Path("场景.jpg")]
 rid = str(uuid4())

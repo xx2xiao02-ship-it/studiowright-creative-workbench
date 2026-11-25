@@ -28,6 +28,7 @@ READINESS_RECOVERABLE_BLOCKS=('provider_error','provider_connection_failed','pro
 READINESS_REPLY='GEMINI_READY'
 READINESS_PROMPT='这是创作工作台的云端连通性检查。请只回复 GEMINI_READY，不要添加其他文字。'
 MAX_TIMEOUT_ATTEMPTS=4
+IMAGE_SESSION_START_TIMEOUT='protocol_timeout_2'
 DEFAULT_MAX_CONCURRENCY=50
 MAX_CONCURRENCY=50
 ACCOUNT_BLOCK_REASONS=(AUTH_UNSENT,'authorization_still_required','verification_required','quota_or_rate_limit')
@@ -636,9 +637,10 @@ class OfficialPool:
 
     def reserve_retry(self,job,result,auth_recovered=False):
         reason=result.get('reason')
+        image_session_timeout=(reason==IMAGE_SESSION_START_TIMEOUT and job.get('attachments','[]')!='[]')
         unsent=(result.get('submitted') is False and result.get('response') is None
                 and result.get('first_text_ms') is None
-                and (reason==TEMPORARY_LAUNCH_FAILURE or (reason==AUTH_UNSENT and auth_recovered)))
+                and (reason==TEMPORARY_LAUNCH_FAILURE or image_session_timeout or (reason==AUTH_UNSENT and auth_recovered)))
         finished_bad=(result.get('submitted') is True and reason in (BAD_REPLY,INCOMPLETE_REPLY))
         if result.get('status')!='failed' or not (unsent or finished_bad):
             return False
@@ -657,6 +659,7 @@ class OfficialPool:
             self.finish_attempt(db,request_id,result,now)
             db.execute("INSERT INTO official_attempts(request_id,ordinal,status,started) VALUES(?,2,'running',?)",(request_id,now))
             note=('首次回复已结束但未能正常回答' if finished_bad else
+                  '首次建立 Gemini 会话超时，图片尚未发送' if image_session_timeout else
                   '首次未发送，已有授权已恢复' if auth_recovered else '首次未发送，启动遇到临时故障')
             db.execute("UPDATE requests SET note=? WHERE request_id=?",(note+'，正在用原账号重试一次。',request_id))
             db.execute('COMMIT')
@@ -751,6 +754,8 @@ class OfficialPool:
         note=('官方调用完成。' if status=='completed' else '原账号需要重新授权，消息尚未发送。' if reason in (AUTH_UNSENT,'authorization_still_required','readiness_authorization_required') else '图片文件无法读取或校验失败，未发送。' if reason=='invalid_image_input' else 'Google要求额外核验，已停止。' if reason=='verification_required' else '官方额度或频率受限，已停止。' if reason=='quota_or_rate_limit' else '调用结果需要核对，已停止。' if status=='unknown' else '回复已结束，但未能正常回答。' if reason in (BAD_REPLY,INCOMPLETE_REPLY,'readiness_unexpected_reply') else '本轮未成功，已停止。')+' 全程使用原账号。'
         if status=='completed' and result.get('completion_source')==RECOVERED:
             note+=' 早期容量503已恢复，完整结束回执已核对。'
+        if status=='failed' and reason==IMAGE_SESSION_START_TIMEOUT and result.get('submitted') is False:
+            note='建立 Gemini 会话超时，图片尚未发送。'
         if status=='unknown' and reason=='timeout_unconfirmed':
             note='等待 Gemini 回复超时，'+('已保留部分回复；' if result.get('response') else '')+'最终结果未确认，未重发。'
         with self.pool.connection() as db:

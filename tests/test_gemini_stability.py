@@ -11,13 +11,14 @@ import tempfile
 import textwrap
 import threading
 import unittest
+from uuid import uuid4
 from types import SimpleNamespace as S
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1] / 'packaging/ubuntu/snapshot/workbench'
 sys.path.insert(0, str(ROOT))
 from gemini_execution import CallBudget, execution_limits
-from official_pool import OfficialPool, DEFAULT_MAX_CONCURRENCY
+from official_pool import OfficialPool, DEFAULT_MAX_CONCURRENCY, IMAGE_SESSION_START_TIMEOUT
 from dispatch_limit import DispatchLimit
 from official_runtime import OfficialRuntime, MODEL, BAD_REPLY
 import material_vision
@@ -213,14 +214,16 @@ class ImageNoRetry(unittest.TestCase):
         pool.pool = S(state_dir=Path('/unused'))
         pool.reserve_retry = Mock(return_value=True)
         job = dict(request_id='test',account_key='a',prompt='describe',attachments='[]',no_retry=1)
-        result = dict(status='failed',submitted=True,reason=BAD_REPLY)
-        with patch.object(vision,'normalized_attachments',return_value=[]), \
-             patch.object(vision,'files_for',return_value=([],[])), \
-             patch.object(vision,'prompt_parts',return_value=[]), \
-             patch.object(material_vision,'analyze',return_value=result) as analyze:
-            self.assertEqual(pool.run_image(job), result)
-            analyze.assert_called_once()
-            pool.reserve_retry.assert_not_called()
+        for reason,submitted in ((BAD_REPLY,True),(IMAGE_SESSION_START_TIMEOUT,False)):
+            result = dict(status='failed',submitted=submitted,reason=reason)
+            with self.subTest(reason=reason), \
+                 patch.object(vision,'normalized_attachments',return_value=[]), \
+                 patch.object(vision,'files_for',return_value=([],[])), \
+                 patch.object(vision,'prompt_parts',return_value=[]), \
+                 patch.object(material_vision,'analyze',return_value=result) as analyze:
+                self.assertEqual(pool.run_image(job), result)
+                analyze.assert_called_once()
+                pool.reserve_retry.assert_not_called()
 
 
 @unittest.skipUnless(os.name == 'posix', 'Pipe selector integration requires Linux')
@@ -295,6 +298,67 @@ class LocalTransport(unittest.TestCase):
             self.assertEqual(result['reason'], 'protocol_idle_timeout_4')
             self.assertEqual(result['response'], 'A')
             self.assertLess(result['total_ms'], 4000)
+
+    @patch('material_vision.official_network_env', return_value={})
+    @patch('official_pool.reader_for')
+    def test_image_session_timeout_retries_on_the_same_request_before_sending(self, reader, _):
+        from live_pool import RealPool
+
+        body = '''
+            import json,sys,time
+            from pathlib import Path
+            sessions=Path(__file__).with_suffix('.sessions')
+            prompts=Path(__file__).with_suffix('.prompts')
+            def emit(d):print(json.dumps(d),flush=True)
+            for line in sys.stdin:
+                req=json.loads(line)
+                method=req['method']
+                if method=='initialize':
+                    result={'agentCapabilities':{'promptCapabilities':{'image':True}}}
+                elif method=='session/new':
+                    first=not sessions.exists()
+                    with sessions.open('a') as record:record.write('new\\n')
+                    if first:time.sleep(30)
+                    result={'sessionId':'fixture','models':{'currentModelId':'gemini-4-hydrogen-medium'}}
+                elif method=='session/prompt':
+                    with prompts.open('a') as record:record.write('sent\\n')
+                    emit({'method':'session/update','params':{'update':{'sessionUpdate':'agent_message_chunk',
+                        'content':{'type':'text','text':'red square'}}}})
+                    result={'stopReason':'end_turn'}
+                else:raise AssertionError(method)
+                emit({'jsonrpc':'2.0','id':req['id'],'result':result})
+        '''
+        key='a'*64
+        request_id=str(uuid4())
+        attachments=[{'index':0,'extension':'png','sha256':'f'*64}]
+        reader.return_value.cached_accounts.return_value={}
+        with tempfile.TemporaryDirectory() as d:
+            runtime, root = self.setup_runtime(d, body)
+            runtime.inventory=lambda:{key:True}
+            runtime.text_models=lambda:{key:{'gemini-4-hydrogen-medium'}}
+            with closing(RealPool(root,root)) as live, \
+                 patch.object(vision,'files_for',return_value=(attachments,[])), \
+                 patch.object(vision,'prompt_parts',return_value=[]):
+                live.official.runtime=runtime
+                live.official.generate('auto','describe',request_id,[{'key':'flow-account-'+key}],
+                                       attachments,image_analysis=True)
+                job=live.official.claim()
+                self.assertEqual((job['request_id'],job['account_key']),(request_id,key))
+                self.assertEqual(job['model'],'gemini-4-hydrogen-medium')
+                result=live.official.run_image(job)
+                live.official.finish(job,result)
+                self.assertEqual((result['status'],result['response']),('completed','red square'))
+                with live.connection() as db:
+                    attempts=db.execute("""SELECT ordinal,status,reason,submitted FROM official_attempts
+                        WHERE request_id=? ORDER BY ordinal""",(request_id,)).fetchall()
+                self.assertEqual([tuple(row) for row in attempts],[
+                    (1,'failed',IMAGE_SESSION_START_TIMEOUT,0),(2,'completed',None,1),
+                ])
+                self.assertEqual((root/'fake-cli.sessions').read_text(),'new\nnew\n')
+                self.assertEqual((root/'fake-cli.prompts').read_text(),'sent\n')
+                receipts=root/'official-image-audit'
+                self.assertFalse((receipts/(request_id+'.json')).exists())
+                self.assertTrue((receipts/(request_id+'.attempt-2.json')).is_file())
 
 
 if __name__ == '__main__':
