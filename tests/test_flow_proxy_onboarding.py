@@ -5,12 +5,13 @@ from importlib.util import module_from_spec, spec_from_file_location
 import json
 from pathlib import Path
 import sys
-from threading import Barrier
+from threading import Barrier, Event
 import time
 import unittest
 from unittest.mock import patch
 
 from starlette.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 from test_flow_regressions import fixture_directory
 
 SNAPSHOT = Path(__file__).resolve().parents[1] / 'packaging/ubuntu/snapshot'
@@ -134,6 +135,39 @@ class WindowsProxyOnboarding(unittest.TestCase):
             })
             self.assertEqual(confirmed.status_code, 200)
             start.assert_called_once_with(profile)
+
+    def test_slow_state_request_does_not_block_health_or_duplicate_work(self):
+        started = Event()
+        release = Event()
+        original_tasks = self.store.tasks
+        session, _ = server.WebAuth(self.store).new_session(False)
+
+        def read_tasks():
+            started.set()
+            if not release.wait(4):
+                raise RuntimeError('health check could not run during snapshot')
+            return original_tasks()
+
+        async def check():
+            async with AsyncClient(transport=ASGITransport(app=self.client.app), base_url='http://testserver',
+                                   cookies={'sw_console_fixture': session}) as client:
+                requests = [asyncio.create_task(client.get('/api/state'))]
+                try:
+                    self.assertTrue(await asyncio.to_thread(started.wait, 2))
+                    requests.append(asyncio.create_task(client.get('/api/state')))
+                    reply = await asyncio.wait_for(client.get('/health'), timeout=1.5)
+                    self.assertEqual(reply.status_code, 200)
+                    self.assertFalse(requests[0].done())
+                    self.assertFalse(requests[1].done())
+                finally:
+                    release.set()
+                    results = await asyncio.gather(*requests, return_exceptions=True)
+            self.assertEqual([reply.status_code for reply in results], [200, 200])
+            self.assertEqual(results[0].content, results[1].content)
+
+        with patch.object(self.store, 'tasks', side_effect=read_tasks) as tasks:
+            asyncio.run(check())
+            tasks.assert_called_once_with()
 
     def test_same_cached_import_waits_then_verifies_with_a_unique_exit(self):
         email = 'new-account@example.test'

@@ -15,7 +15,7 @@ from pathlib import Path
 from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse
+from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 
@@ -685,10 +685,10 @@ class Console:
             raise ValueError("缺少提交编号，请重新提交。")
         return profile, project, kind, params, key
 
-    def task_view(self, row):
+    def task_view(self, row, *, load_retry=True):
         # Keep the public ID and submission metadata; resolve the current attempt separately.
         out = dict(row)
-        retry = self.store.retry_detail(row['id'])
+        retry = self.store.retry_detail(row['id']) if load_retry else None
         if not retry or retry['ordinal'] != 0 or not retry['attempts']:
             return out, retry
         latest = retry['attempts'][-1]
@@ -720,8 +720,8 @@ class Console:
             out.update(status='failed',result=None,error=current['error'] or '重试未能完成。')
         return out, retry
 
-    def public_task(self, row):
-        row, retry = self.task_view(row)
+    def public_task(self, row, *, load_retry=True):
+        row, retry = self.task_view(row, load_retry=load_retry)
         result = row.get("result") or {}
         files = []
         for path in result.get("files", []):
@@ -870,18 +870,20 @@ def create_app(root, adapter, test=False):
         response.delete_cookie(cookie_name)
         return response
 
-    async def state(request):
-        tasks = [c.public_task(t) for t in c.store.tasks()]
+    def state_snapshot(balance_refreshing, remote_logins):
+        rows = c.store.tasks()
+        retry_ids = {row['task_id'] for row in c.store.rows('SELECT task_id FROM flow_retry_attempts')}
+        tasks = [c.public_task(row, load_retry=row['id'] in retry_ids) for row in rows]
         now = time.time()
         accounts = account_status(c.store.accounts(), c.root / "data/studiowright.db", now)
         active_accounts = [a for a in accounts if not a.get('flow_removed')]
-        preflight = await asyncio.to_thread(c.dispatch_preflight, [a['profile'] for a in active_accounts])
+        preflight = c.dispatch_preflight([a['profile'] for a in active_accounts])
         incidents = c.store.page_incidents()
         for account in accounts:
             profile = account['profile']
             account['dispatch_preflight_reasons'] = preflight.get(profile, [])
             account['flow_page_incident'] = incidents.get(profile)
-        insights = await asyncio.to_thread(c.insights.report, active_accounts, now, c.balance_refreshing)
+        insights = c.insights.report(active_accounts, now, balance_refreshing)
         return JSONResponse(
             {
                 "test": test,
@@ -899,10 +901,19 @@ def create_app(root, adapter, test=False):
                 "source_commit": os.getenv('SW_SOURCE_COMMIT'),
                 "console_api_version": "2026-10-31.account-insights.1",
                 "remote_login_ready": c.remote.supported(),
-                "remote_logins": [c.remote.public(s) for s in c.remote.sessions.values()],
+                "remote_logins": remote_logins,
                 "time": now,
             }
-        )
+        ).body
+
+    state_in_progress = None
+
+    async def state(request):
+        nonlocal state_in_progress
+        if state_in_progress is None or state_in_progress.done():
+            remote_logins = [c.remote.public(s) for s in c.remote.sessions.values()]
+            state_in_progress = asyncio.create_task(asyncio.to_thread(state_snapshot, c.balance_refreshing, remote_logins))
+        return Response(await asyncio.shield(state_in_progress), media_type='application/json')
 
     async def accounts(request):
         try:
