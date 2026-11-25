@@ -514,6 +514,7 @@ def account_rows(state):
         rows.append({"key": "flow-account-" + hashlib.sha256(profile.encode("utf-8")).hexdigest(),
                      "profile": profile, "label": clean_text(row.get("label"), 120), "email": email,
                      "flow_login": "verified" if row.get("state") == "verified" else "unknown",
+                     "flow_removed": row.get("flow_removed") == 1,
                      "flow_health": health, "flow_balance": balance,
                      "flow_preflight_reasons": preflight,
                      "flow_page_incident": ({'id': incident['id'], 'phase': incident.get('phase'),
@@ -808,6 +809,32 @@ class Sources:
             pass
         return 503, {'error':'重试结果待核对，请刷新原任务记录。'}
 
+    def remove_flow_account(self, key):
+        if not isinstance(key, str) or not re.fullmatch(r'[0-9a-f]{64}', key):
+            raise ValueError('请选择已登记的 Flow 账号。')
+        state, _ = self.read('flow', '/api/state')
+        accounts = account_rows(state) if state is not None else None
+        if accounts is None:
+            return 503, {'error': 'Flow 账号名单暂不可读取。'}
+        matches = [row['profile'] for row in accounts if row['key'] == 'flow-account-' + key and row['email']]
+        if len(matches) != 1:
+            raise ValueError('Flow 账号无法唯一匹配，请刷新。')
+        origin = f"http://127.0.0.1:{self.ports['flow']}"
+        request = Request(origin+'/api/accounts/flow-remove', method='POST',
+                          data=json.dumps({'profile':matches[0],'confirmed':True}).encode(),
+                          headers={'Content-Type':'application/json','Origin':origin,'X-Console-Request':'1'})
+        try:
+            with self.opener.open(request, timeout=self.timeout) as response:
+                result = json.loads(response.read(8193))
+                if isinstance(result, dict) and result.get('removed') is True:
+                    return 200, {'removed':True, 'message':'已从 Flow 号池移除，项目和任务历史已保留。'}
+        except HTTPError as exc:
+            if exc.code == 409:
+                return 409, {'error':'该账号仍有排队、执行中或等待重试的生成任务，请处理原任务后再移除。'}
+        except (OSError, ValueError):
+            pass
+        return 503, {'error':'Flow 账号移除状态未确认，请刷新后核对。'}
+
     def flow_risk_resume(self, profile, incident=None):
         if not isinstance(profile, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', profile):
             raise ValueError('账号标识不正确。')
@@ -994,7 +1021,7 @@ class Sources:
                                 'repairable': (a['flow_login']=='verified' and not a['flow_page_incident']
                                                and a['flow_risk_known'] and not a['flow_risk_paused']
                                                and a['flow_pacing_known'] and not a['flow_cooling'])}
-                               for a in accounts if a.get('email')],
+                               for a in accounts if a.get('email') and not a.get('flow_removed')],
                    'bindings': coordination.get('window_bindings', []), 'busy': sorted(p for p in busy if p)}
         helper = ROOT/'flow_check_readiness.py'
         if helper.is_symlink() or not helper.is_file():
@@ -1991,6 +2018,24 @@ def make_handler(sources, deployment="local", coordinator=None, real_pool=None, 
                 print(f'{time.strftime("%Y-%m-%d %H:%M:%S")} host shutdown requested from panel', flush=True)
                 threading.Timer(1.5, request_host_shutdown).start()
                 return self.json_response(202, {'status':'shutdown_scheduled'})
+            if self.path == '/api/flow/accounts/remove' and deployment == 'ubuntu':
+                if not self.valid(mutation=True):
+                    return self.json_response(403, {'error':'请从工作台移除 Flow 账号。'})
+                length = self.headers.get('Content-Length','')
+                if (self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length',[])) != 1
+                        or not re.fullmatch(r'[0-9]{1,3}',length) or not 2 <= int(length) <= 256):
+                    return self.json_response(400, {'error':'移除账号请求格式不正确。'})
+                try:
+                    self.connection.settimeout(4)
+                    data = json.loads(self.rfile.read(int(length)))
+                    if not isinstance(data,dict) or set(data)!={'account','confirmed'} or data['confirmed'] is not True:
+                        raise ValueError('请确认要从 Flow 号池移除的账号。')
+                    code, result = sources.remove_flow_account(data['account'])
+                    return self.json_response(code,result)
+                except ValueError as exc:
+                    return self.json_response(400, {'error':str(exc)})
+                except (OSError, sqlite3.Error):
+                    return self.json_response(503, {'error':'暂时无法移除该 Flow 账号。'})
             if self.path == '/api/gemini/accounts/remove':
                 from live_pool import Conflict
                 if not real_pool or not self.valid(mutation=True):

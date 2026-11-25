@@ -261,6 +261,8 @@ class Activation:
                 raise ValueError('已有一轮账号检查正在进行或等待冷却')
             snapshot = self.snapshot()
             items = snapshot['real_accounts']['items']
+            if service == 'flow':
+                items = [a for a in items if not a.get('flow_removed')]
             keys = [a.get('key', '').removeprefix('flow-account-') for a in items]
             if not keys or len(keys) > 50 or len(set(keys)) != len(keys) or any(not re.fullmatch(r'[0-9a-f]{64}', k) for k in keys):
                 raise ValueError('现有账号列表不能唯一确认')
@@ -325,7 +327,7 @@ class Activation:
             return self.update(batch,key,'blocked','账号归属无法确认，未操作')
         with self.db() as db:
             row = db.execute('SELECT service FROM batches WHERE id=?',(batch,)).fetchone()
-        if row and row['service']=='gemini':
+        if row and (row['service']=='gemini' or row['service']=='all' and matches[0].get('flow_removed')):
             return self.process_gemini(batch,key)
         return self.process_flow(batch,key,matches[0],snapshot)
 
@@ -391,6 +393,8 @@ class Activation:
 
     def process_flow(self, batch, key, account, snapshot):
         """Submit only one existing Flow login/project check; never generate or retry."""
+        if account.get('flow_removed'):
+            return self.update(batch,key,'blocked','账号已移出 Flow 号池，本次未检查 Flow。')
         if account.get('flow_page_incident'):
             return self.update(batch,key,'blocked','Flow 页面显示异常活动，等待人工核查')
         with self.db() as db:

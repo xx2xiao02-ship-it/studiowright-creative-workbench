@@ -389,7 +389,7 @@ class Console:
                     accounts = self.store.accounts()
                     states = account_status(accounts, database)
                     allowed = {a['profile'] for a in states if a['generation_state'] == 'not_cooling_down'
-                               and a['risk_paused'] is False}
+                               and a['risk_paused'] is False and not a.get('flow_removed')}
                     if not self.test:
                         from task_coordinator import Coordinator
                         held = {w['profile'] for w in Coordinator().status()['windows']
@@ -446,7 +446,7 @@ class Console:
         states = account_status(self.store.accounts(), self.root / 'data/studiowright.db', now)
         allowed = {a['profile'] for a in states if a['state'] == 'verified'
                    and a['generation_state'] == 'not_cooling_down' and a['risk_paused'] is False
-                   and a['profile'] not in self.busy and a['profile'] not in self.balance_busy}
+                   and not a.get('flow_removed') and a['profile'] not in self.busy and a['profile'] not in self.balance_busy}
         if not self.test:
             allowed -= {w['profile'] for w in Coordinator().status()['windows']
                         if w['state'] not in ('idle',)}
@@ -535,7 +535,7 @@ class Console:
                         continue
                     if self.dispatch_limit.paused():
                         break
-                    if (profile in incidents or account.get('risk_paused') is True
+                    if (account.get('flow_removed') or profile in incidents or account.get('risk_paused') is True
                             or account.get('generation_state') == 'cooling_down'):
                         continue
                     if profile in self.busy or self.remote.for_profile(profile):
@@ -874,13 +874,14 @@ def create_app(root, adapter, test=False):
         tasks = [c.public_task(t) for t in c.store.tasks()]
         now = time.time()
         accounts = account_status(c.store.accounts(), c.root / "data/studiowright.db", now)
-        preflight = await asyncio.to_thread(c.dispatch_preflight, [a['profile'] for a in accounts])
+        active_accounts = [a for a in accounts if not a.get('flow_removed')]
+        preflight = await asyncio.to_thread(c.dispatch_preflight, [a['profile'] for a in active_accounts])
         incidents = c.store.page_incidents()
         for account in accounts:
             profile = account['profile']
-            account['dispatch_preflight_reasons'] = preflight[profile]
+            account['dispatch_preflight_reasons'] = preflight.get(profile, [])
             account['flow_page_incident'] = incidents.get(profile)
-        insights = await asyncio.to_thread(c.insights.report, accounts, now, c.balance_refreshing)
+        insights = await asyncio.to_thread(c.insights.report, active_accounts, now, c.balance_refreshing)
         return JSONResponse(
             {
                 "test": test,
@@ -917,6 +918,21 @@ def create_app(root, adapter, test=False):
             return JSONResponse({"ok": True})
         except (ValueError, TypeError) as exc:
             return JSONResponse({"error": safe_error(exc)}, status_code=400)
+
+    async def remove_flow_account(request):
+        if request.state.api_key:
+            return JSONResponse({'error': '请从工作台管理 Flow 账号。'}, status_code=403)
+        try:
+            data = await payload(request)
+            profile = data.get('profile')
+            if (set(data) != {'profile','confirmed'} or data['confirmed'] is not True
+                    or not isinstance(profile, str) or not PROFILE.fullmatch(profile)):
+                raise ValueError('请确认要从 Flow 号池移除的账号。')
+            if not c.store.remove_flow_account(profile):
+                return JSONResponse({'error': '该账号仍有排队、执行中或等待重试的生成任务。请处理原任务后再移除。'}, status_code=409)
+            return JSONResponse({'removed': True, 'message': '已从 Flow 号池移除，项目和任务历史已保留。'})
+        except (ValueError, TypeError) as exc:
+            return JSONResponse({'error': safe_error(exc)}, status_code=400)
 
     async def resume_flow_risk(request):
         try:
@@ -1563,6 +1579,7 @@ def create_app(root, adapter, test=False):
         Route("/api/library/{ident}/tags", material_tags, methods=["POST"]),
         Route("/api/library/{ident}", material_detail),
         Route("/api/accounts", accounts, methods=["POST"]),
+        Route("/api/accounts/flow-remove", remove_flow_account, methods=["POST"]),
         Route("/api/projects", projects, methods=["POST"]),
         Route("/api/retry-project", retry_project, methods=["POST"]),
         Route("/api/tasks", submit, methods=["POST"]),

@@ -1354,6 +1354,7 @@ class RealPool:
         blocked = RealPool._flow_window_blocked(snapshot)
         return {a['profile']: a for a in snapshot.get('real_accounts', {}).get('items', [])
                 if isinstance(a, dict) and isinstance(a.get('profile'), str) and a.get('flow_login') == 'verified'
+                and not a.get('flow_removed')
                 and not a.get('flow_page_incident') and not a.get('flow_preflight_reasons')
                 and a.get('flow_health') == 'ready' and a.get('flow_risk_known') is True
                 and a.get('flow_risk_paused') is False and a.get('flow_pacing_known') is True
@@ -1589,6 +1590,9 @@ class RealPool:
             accounts = [a for a in snapshot.get('real_accounts', {}).get('items', []) if a.get('profile') == profile]
             if len(accounts) != 1 or accounts[0].get('flow_login') != 'verified':
                 raise Conflict('该项目所属账号的 Flow 登录未确认。')
+        if not prior and any(a.get('profile') == profile and a.get('flow_removed')
+                             for a in snapshot.get('real_accounts', {}).get('items', [])):
+            raise Conflict('这个项目所属账号已从 Flow 号池移除。')
         if not prior and profile in self._flow_window_blocked(snapshot):
             raise Conflict('该账号的 Flow 窗口有旧任务或验证待核对，本次未入队。')
         body = {'profile': profile, 'project': project_id, 'kind': kind, 'params': flow_params,

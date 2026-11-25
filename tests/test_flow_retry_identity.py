@@ -62,6 +62,32 @@ class RetryIdentity(unittest.TestCase):
             'params': {'model': 'nano-banana-2.1', 'prompt': 'fixture', 'aspect': '16:9', 'count': 1}, **extra,
         })
 
+    def test_flow_pool_removal_preserves_history_and_refuses_active_or_new_generation(self):
+        path = '/api/accounts/flow-remove'
+        body = {'profile':'fixture', 'confirmed':True}
+        headers = {'Origin':'http://testserver', 'X-Console-Request':'1'}
+        self.assertEqual(self.client.post(path, headers=self.headers(), json=body).status_code, 403)
+        submitted = self.submit('before-remove')
+        self.assertEqual(submitted.status_code, 202)
+        ident = submitted.json()['id']
+        with patch.object(self.store, 'authenticated', return_value=True):
+            self.assertEqual(self.client.post(path, headers=headers, json={**body,'confirmed':False}).status_code, 400)
+            self.assertEqual(self.client.post(path, headers=headers, json=body).status_code, 409)
+            self.assertEqual(self.store.claim(set())['id'], ident)
+            self.assertEqual(self.client.post(path, headers=headers, json=body).status_code, 409)
+            self.store.finish(ident, result={'files':[]})
+            self.assertTrue(self.client.post(path, headers=headers, json=body).json()['removed'])
+            self.assertTrue(self.client.post(path, headers=headers, json=body).json()['removed'])
+        self.assertEqual(self.store.account('fixture')['email'], 'fixture@example.test')
+        self.assertEqual(self.store.accounts()[0]['flow_removed'], 1)
+        self.assertTrue(self.store.has_project('fixture', self.project))
+        self.assertEqual(self.store.task(ident)['status'], 'succeeded')
+        self.assertTrue(self.output.is_file())
+        self.assertEqual(self.submit('before-remove').json()['id'], ident)
+        blocked = self.submit('after-remove')
+        self.assertEqual(blocked.status_code, 400)
+        self.assertIn('已从 Flow 号池移除', blocked.json()['error'])
+
     def fail_original(self, *, evidence='confirmed_before_submit'):
         response = self.submit('fixture-original')
         self.assertEqual(response.status_code, 202, response.text)

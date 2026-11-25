@@ -15,6 +15,7 @@ from flow_window_policy import Lifecycle,INTERVAL,safe_page,ensure_unique
 
 def gate(account,*,manual=False,now=None):
     now=time.time() if now is None else now;profile=account['profile']
+    if account.get('flow_removed'):return 'account_removed'
     if (S/'maintenance').exists():return 'maintenance'
     saved=next((r for r in Lifecycle().status() if r['profile']==profile),None)
     if not manual and saved and now<(saved.get('next_due') or 0):return 'not_due'

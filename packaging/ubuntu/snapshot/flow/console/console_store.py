@@ -21,6 +21,7 @@ class Store:
             db.executescript("""
             PRAGMA journal_mode=WAL;
             CREATE TABLE IF NOT EXISTS accounts(profile TEXT PRIMARY KEY, label TEXT, email TEXT, checked REAL, state TEXT DEFAULT 'unknown', error TEXT);
+            CREATE TABLE IF NOT EXISTS flow_removed_accounts(profile TEXT PRIMARY KEY, removed REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS flow_page_incidents(
                 id TEXT PRIMARY KEY, profile TEXT NOT NULL, phase TEXT NOT NULL,
                 observed REAL NOT NULL, screenshot BLOB, reviewed REAL);
@@ -64,7 +65,23 @@ class Store:
             return db.execute(sql, args).rowcount
 
     def accounts(self):
-        return self.rows("SELECT * FROM accounts ORDER BY profile")
+        return self.rows("""SELECT a.*, r.profile IS NOT NULL AS flow_removed
+            FROM accounts a LEFT JOIN flow_removed_accounts r ON r.profile=a.profile ORDER BY a.profile""")
+
+    def remove_flow_account(self, profile):
+        """Remove pool membership while retaining the browser, projects and task history."""
+        with closing(self.connect()) as db, db:
+            db.execute('BEGIN IMMEDIATE')
+            if not db.execute('SELECT 1 FROM accounts WHERE profile=? AND email IS NOT NULL', (profile,)).fetchone():
+                raise ValueError('请选择已登记的 Flow 账号。')
+            if db.execute("""SELECT 1 FROM flow_task_execution_rows e
+                    LEFT JOIN flow_retry_roots r ON r.root_id=e.root_id
+                    WHERE e.profile=? AND e.kind IN ('image','video')
+                      AND (e.status IN ('queued','running') OR r.state='pending_switch')
+                    LIMIT 1""", (profile,)).fetchone():
+                return False
+            db.execute('INSERT OR IGNORE INTO flow_removed_accounts VALUES(?,?)', (profile, time.time()))
+            return True
 
     def page_incidents(self):
         return {row['profile']: row for row in self.rows(
@@ -202,6 +219,9 @@ class Store:
                     if bool(recorded) != auto_retry:
                         raise ValueError('同一提交编号不能更改自动重试设置。')
                 return row
+            if kind in RETRY_KINDS and db.execute(
+                    'SELECT 1 FROM flow_removed_accounts WHERE profile=?', (profile,)).fetchone():
+                raise ValueError('该账号已从 Flow 号池移除。')
             if kind == "sync":
                 pending = db.execute("SELECT * FROM tasks WHERE profile=? AND kind='sync' AND status IN ('queued','running') ORDER BY created DESC LIMIT 1", (profile,)).fetchone()
                 if pending:
@@ -241,7 +261,10 @@ class Store:
         with closing(self.connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             rows = db.execute(
-                "SELECT * FROM flow_task_execution_rows WHERE status='queued' ORDER BY created"
+                """SELECT e.* FROM flow_task_execution_rows e WHERE e.status='queued'
+                AND (e.kind NOT IN ('image','video') OR NOT EXISTS
+                     (SELECT 1 FROM flow_removed_accounts r WHERE r.profile=e.profile))
+                ORDER BY e.created"""
             ).fetchall()
             row = next((r for r in rows if (request_keys is None or r['request_key'] in request_keys) and r["profile"] not in busy and
                         (session_import_allowed is None or r['kind'] != 'session_import' or r['id'] in session_import_allowed) and
@@ -398,6 +421,8 @@ class Store:
                 (root,)).fetchone()
             if not current or current['state'] != 'pending_switch':
                 return False
+            if db.execute('SELECT 1 FROM flow_removed_accounts WHERE profile=?', (profile,)).fetchone():
+                return False
             candidates = db.execute("SELECT p.id FROM accounts a JOIN projects p ON p.profile=a.profile WHERE a.profile=? AND a.state='verified' AND p.title='FLOW+' || substr(a.email,1,instr(a.email,'@')-1)", (profile,)).fetchall()
             used = db.execute('SELECT 1 FROM flow_task_execution_rows WHERE root_id=? AND profile=?', (root, profile)).fetchone()
             previous = db.execute('SELECT * FROM flow_task_execution_rows WHERE root_id=? ORDER BY ordinal DESC LIMIT 1', (root,)).fetchone()
@@ -438,6 +463,8 @@ class Store:
                         and project != previous['project'])):
                 raise ValueError('原参考图必须复用所属项目，且每次只重试一张。')
             profile = previous['profile']
+            if db.execute('SELECT 1 FROM flow_removed_accounts WHERE profile=?', (profile,)).fetchone():
+                raise ValueError('原账号已从 Flow 号池移除。')
             projects = db.execute("""SELECT p.id FROM projects p JOIN accounts a ON a.profile=p.profile
                 WHERE p.profile=? AND a.state='verified' AND instr(a.email,'@')>1
                 AND p.title='FLOW+' || substr(a.email,1,instr(a.email,'@')-1)""", (profile,)).fetchall()
