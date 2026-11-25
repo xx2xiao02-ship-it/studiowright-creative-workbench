@@ -525,6 +525,7 @@ test('account cards render fallback states without aborting the account list', (
   for (const status of ['ready', 'blocked', 'unknown', 'checking']) {
     const context = vm.createContext({
       item: {profile:'test', key:'flow-account-test', gemini:'verified'}, state:{snapshot:{}},
+      flow:true,
       channelReadFailed:false, officialQuotaData:null, officialQuotaReadFailed:false,
       flowRow:{status,issues:[]}, geminiRow:{status}, issues:[],
       flowWindowIssue: () => null, readinessBadge: row => row.status,
@@ -539,6 +540,27 @@ test('account cards render fallback states without aborting the account list', (
     assert.equal(Boolean(result.geminiFallback), status !== 'ready');
     assert.equal(result.geminiStatusText, status === 'ready' ? '可调用' : '待确认');
   }
+});
+
+test('dragging in Gemini keeps the shared order entries omitted by the account tab', async () => {
+  const cards = ['b','a'].map(key=>({dataset:{dragKey:key}}));
+  const accounts = ['a','hidden','b'].map(key=>({key:'flow-account-'+key}));
+  const context = vm.createContext({
+    accountDrag:{key:'b'}, accountOrderOverride:null,
+    state:{snapshot:{real_accounts:{items:accounts}}},
+    applyAccountOrder: items=>items,
+    bareAccountKey:key=>key.replace('flow-account-',''),
+    document:{querySelectorAll:()=>cards},
+    renderAccounts(){},
+    postJson:async (path, payload)=>{
+      assert.equal(path,'/api/account-order');
+      assert.deepEqual(Array.from(payload.order), ['b','hidden','a']);
+    },
+    refreshChannelStatus(){}
+  });
+  load('saveAccountOrderFromDom',context);
+  vm.runInContext('saveAccountOrderFromDom()',context);
+  assert.deepEqual(Array.from(context.accountOrderOverride), ['b','hidden','a']);
 });
 
 test('account reason identifies running work without inventing a failure', () => {

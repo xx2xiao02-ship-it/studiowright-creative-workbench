@@ -130,9 +130,14 @@ button:disabled { cursor: wait; opacity: .6; }
 .account-page-heading h1 { line-height: 1.25; }
 .account-page-heading .button-primary { background: #20584a; box-shadow: none; }
 .account-page-heading .button-primary:hover { background: #164837; }
-.account-pool-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 12px; }
+.account-pool-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; min-height: 38px; margin-bottom: 12px; }
 .account-pool-heading h2 { margin: 0; font-size: 20px; letter-spacing: -.025em; }
 .account-pool-summary { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; margin-bottom: 12px; }
+.account-pool-tabs { grid-column: span 2; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: inherit; }
+.account-pool-tabs [role="tab"] { position: relative; text-align: start; }
+.account-pool-tabs [role="tab"][aria-selected="true"] { border-color: currentColor; box-shadow: inset 0 -3px 0 currentColor; }
+.account-pool-tabs [role="tab"]:hover { border-color: currentColor; }
+.account-pool-tabs [role="tab"]:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .account-pool-stat { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 3px 8px; min-width: 0; padding: 10px 14px; border: 1px solid #dce6df; border-radius: 10px; background: #fff; color: #345347; }
 .account-pool-stat-flow { background: #f0f7f2; border-color: #d4e4da; color: #205b45; }
 .account-pool-stat-gemini { background: #eff5f9; border-color: #d6e3eb; color: #23536c; }
@@ -140,6 +145,7 @@ button:disabled { cursor: wait; opacity: .6; }
 .account-pool-stat > strong { font-size: 25px; line-height: 1.25; letter-spacing: -.035em; font-variant-numeric: tabular-nums; }
 .account-pool-stat strong small { font-size: 13px; letter-spacing: 0; white-space: nowrap; }
 .account-pool-stat > small { flex-basis: 100%; color: #51675c; font-size: 11px; }
+.account-services.account-services-single { grid-template-columns: minmax(0,1fr); }
 .account-pool + .panel { margin-top: 20px; }
 .account-issue-summary, .account-alert { border: 1px solid #ead6bb; border-radius: 8px; background: #fdf7ee; color: #75491f; overflow-wrap: anywhere; }
 .account-issue-summary { margin-bottom: 12px; }
@@ -970,6 +976,10 @@ td strong { color: #283b31; font-size: 13px; } td code { color: #7c8d82; font-si
   .account-card-heading .account-detail-anchor { grid-column: 3; justify-self: end; }
   .account-pool .account-credit-icon { display: none; }
   .account-retry .subtle { display: block; }
+}
+@media (max-width: 520px) {
+  .account-pool-summary { grid-template-columns: minmax(0,1fr); }
+  .account-pool-tabs { grid-column: auto; }
 }
 /* 音乐生成页 */
 #musicView { --music-ink:#47355f; --music-muted:#655970; --music-line:#e3ddeb; --music-pale:#f6f3fa; }

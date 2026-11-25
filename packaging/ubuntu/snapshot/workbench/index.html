@@ -105,11 +105,18 @@
         </section>
 
         <section id="accountsView" class="view" aria-labelledby="accountsHeading" hidden>
-          <div class="page-heading account-page-heading desk-heading"><div><h1 id="accountsHeading">统一账号池</h1><p>拖动卡片可调整 Gemini 和 Music 的账号优先顺序。</p></div><div class="account-heading-actions"><a class="button button-light" href="#api" data-view="api">API 文档 →</a><a class="button button-primary" href="http://127.0.0.1:18890/" target="_blank" rel="noopener noreferrer">＋ 添加本机账号</a></div></div>
+          <div class="page-heading account-page-heading desk-heading"><div><h1 id="accountsHeading">统一账号池</h1></div><div class="account-heading-actions"><a class="button button-light" href="#api" data-view="api">API 文档 →</a><a class="button button-primary" href="http://127.0.0.1:18890/" target="_blank" rel="noopener noreferrer">＋ 添加本机账号</a></div></div>
           <div class="notice" role="note"><span class="notice-symbol" aria-hidden="true">i</span><span>Flow 与 Gemini 分别判断。官方实测成功仅证明该次调用；登录授权、额外核验和算力中心接入状态请查看账号详情。</span></div>
           <section class="account-pool" aria-labelledby="realAccountsHeading">
-            <div class="account-pool-heading"><h2 id="realAccountsHeading">账号列表</h2><div class="account-heading-actions"><button id="activationScheduleToggle" class="button button-light" type="button" aria-expanded="false" aria-controls="activationSchedulePanel">通道与设置</button><button id="activateAccounts" hidden class="button button-primary" type="button" disabled>检查账号状态</button></div></div>
-            <div id="realAccountsSummary" class="account-pool-summary">正在读取现有账号…</div>
+            <div class="account-pool-heading"><h2 id="realAccountsHeading">账号列表</h2><div class="account-heading-actions"><button id="activationScheduleToggle" class="button button-light" type="button" aria-expanded="false" aria-controls="activationSchedulePanel" hidden>通道与设置</button><button id="activateAccounts" hidden class="button button-primary" type="button" disabled>检查账号状态</button></div></div>
+            <div id="realAccountsSummary" class="account-pool-summary">
+              <div class="account-pool-stat"><span>已登记账号</span><strong id="accountPoolTotal">—</strong></div>
+              <div class="account-pool-tabs" role="tablist" aria-label="账号池">
+                <button id="flowAccountTab" class="account-pool-stat account-pool-stat-flow" type="button" role="tab" aria-selected="true" aria-controls="flowAccountPanel" data-account-pool="flow"><span>Flow 账号池</span><strong><span id="flowAccountReady">—</span> <small id="flowAccountTotal">/ —</small></strong><small id="flowAccountBalance">就绪积分 —</small></button>
+                <button id="geminiAccountTab" class="account-pool-stat account-pool-stat-gemini" type="button" role="tab" aria-selected="false" aria-controls="geminiAccountPanel" tabindex="-1" data-account-pool="gemini"><span>Gemini 账号池</span><strong><span id="geminiAccountReady">—</span> <small id="geminiAccountTotal">/ —</small></strong><small>就绪账号</small></button>
+              </div>
+            </div>
+            <p id="geminiPoolOrderHint" class="panel-caption" hidden>拖动 Gemini 卡片可调整 Gemini 和 Music 的账号优先顺序。</p>
             <div id="activationSchedulePanel" class="activation-schedule" hidden><h3>官方调用 · 账号池</h3><p>新对话按号池优先顺序分配，多轮固定账号；Gemini CLI 默认总并发 50，与 Flow 独立。网页登录和网页保活不参与官方调用，暂停限制继续保留。</p><p id="retainedSettings">正在只读核对已保存的设置…</p><div hidden>
               <form id="activationScheduleForm">
               <div class="activation-schedule-fields"><label><input id="activationScheduleEnabled" type="checkbox"> 启用每天定时检查</label><label>北京时间 <input id="activationScheduleTime" type="time" value="08:00" required></label><button class="button button-primary" type="submit">保存设置</button></div>
@@ -125,7 +132,8 @@
             </div><p class="panel-caption" hidden>逐个检查 Gemini 登录与额度，并读取 Flow 状态。每个符合条件的账号复用已有浏览器窗口，缺少窗口时按需打开；已有多个窗口不会自动关闭。冷却账号到期后再核对；有未确认消息或风控暂停的账号保留待处理。</p>
             <div id="activationProgress" hidden class="panel-caption" role="status" aria-live="polite">正在读取检查状态…</div>
             <div hidden><details id="activationDetails" hidden><summary>查看本轮账号结果</summary><div id="activationResults"></div></details></div>
-            <div id="realAccountTable"><div class="empty">正在读取账号…</div></div>
+            <div id="flowAccountPanel" role="tabpanel" aria-labelledby="flowAccountTab" tabindex="0"><div id="realAccountTable"><div class="empty">正在读取账号…</div></div></div>
+            <div id="geminiAccountPanel" role="tabpanel" aria-labelledby="geminiAccountTab" tabindex="0" hidden></div>
             <p id="accountActionMessage" class="panel-caption" role="status" aria-live="polite"></p>
           </section>
           <section class="panel list-panel" aria-labelledby="dispatchPolicyHeading" hidden>
@@ -137,11 +145,11 @@
               <p id="dispatchPolicyMessage" class="panel-caption" role="status" aria-live="polite">正在读取规则…</p>
             </form>
           </section>
-          <section class="panel list-panel" aria-labelledby="geminiActivityHeading">
+          <section id="geminiPoolActivity" class="panel list-panel" aria-labelledby="geminiActivityHeading" hidden>
             <div class="panel-heading"><div><h2 id="geminiActivityHeading">Gemini 请求记录</h2><p class="panel-caption">显示最近 100 条记录，官方独立实测与历史通道分别标注。</p></div><button id="refreshGeminiActivity" class="text-link" type="button">刷新记录</button></div>
             <div id="geminiActivity" class="table-wrap"><div class="empty">正在读取请求记录…</div></div>
           </section>
-          <section class="panel original-tasks" aria-labelledby="geminiChatHeading">
+          <section id="geminiPoolChat" class="panel original-tasks" aria-labelledby="geminiChatHeading" hidden>
             <div class="panel-heading"><div><h2 id="geminiChatHeading">Gemini 对话</h2><p class="panel-caption">官方 CLI 通道快捷发送；多轮对话和记录管理请使用对话页。</p></div></div>
             <div class="workflow-demo">
               <label for="geminiAccount">账号</label>

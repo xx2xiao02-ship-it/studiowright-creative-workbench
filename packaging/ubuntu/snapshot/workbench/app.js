@@ -2342,6 +2342,42 @@ void recoverMusicJob();
 const bareAccountKey = key => String(key || "").replace(/^flow-account-/, "");
 let accountOrderOverride = null;
 const accountDrag = {key: null};
+let accountPoolService = 'flow';
+const accountPoolTabs = [$('flowAccountTab'), $('geminiAccountTab')];
+
+function selectAccountPool(service, focus = false) {
+  if (accountDrag.key || accountActionsInFlight.size) return;
+  accountPoolService = service === 'gemini' ? 'gemini' : 'flow';
+  const gemini = accountPoolService === 'gemini';
+  for (const tab of accountPoolTabs) {
+    const selected = tab.dataset.accountPool === accountPoolService;
+    tab.setAttribute('aria-selected', String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    if (selected && focus) tab.focus();
+  }
+  const panel = $(gemini ? 'geminiAccountPanel' : 'flowAccountPanel');
+  const table = $('realAccountTable');
+  if (table.parentElement !== panel) panel.prepend(table);
+  $('flowAccountPanel').hidden = gemini;
+  $('geminiAccountPanel').hidden = !gemini;
+  for (const id of ['geminiPoolOrderHint','geminiPoolActivity','geminiPoolChat','activationScheduleToggle']) $(id).hidden = !gemini;
+  if (!gemini) {
+    $('activationSchedulePanel').hidden = true;
+    $('activationScheduleToggle').setAttribute('aria-expanded','false');
+  }
+  try { localStorage.setItem('accountPoolService', accountPoolService); } catch (_) {}
+  renderAccounts();
+}
+
+for (const [index, tab] of accountPoolTabs.entries()) {
+  tab.addEventListener('click', () => selectAccountPool(tab.dataset.accountPool));
+  tab.addEventListener('keydown', event => {
+    const next = {ArrowLeft: 1-index, ArrowRight: 1-index, Home: 0, End: 1}[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    selectAccountPool(accountPoolTabs[next].dataset.accountPool, true);
+  });
+}
 function applyAccountOrder(list) {
   const order = accountOrderOverride || state.channelStatus?.shared_account_order || state.channelStatus?.account_order;
   if (!Array.isArray(order) || !order.length) return list;
@@ -2351,7 +2387,11 @@ function applyAccountOrder(list) {
 }
 function saveAccountOrderFromDom() {
   if (!accountDrag.key) return;
-  accountOrderOverride = [...document.querySelectorAll("#realAccountTable [data-drag-key]")].map(el => el.dataset.dragKey);
+  const visible = [...document.querySelectorAll("#realAccountTable [data-drag-key]")].map(el => el.dataset.dragKey);
+  const reordered = new Set(visible);
+  const all = applyAccountOrder(state.snapshot?.real_accounts?.items || []).map(item => bareAccountKey(item.key));
+  let index = 0;
+  accountOrderOverride = all.map(key => reordered.has(key) ? visible[index++] : key);
   const order = accountOrderOverride;
   accountDrag.key = null;
   renderAccounts();
@@ -2402,14 +2442,16 @@ function renderAccounts() {
   const focusedFold = document.activeElement?.closest('summary')?.parentElement?.dataset.accountFold;
   const focusedRetry = document.activeElement?.closest('select[data-retry-project]')?.dataset.retryProject;
   if (focusedRetry || accountActionsInFlight.size) return;
+  const flow = accountPoolService === 'flow';
   const data = state.snapshot?.real_accounts;
   if (!data && !state.snapshotAttempted) {
-    $('realAccountsSummary').textContent = '正在读取账号记录…';
     $('realAccountTable').innerHTML = empty('正在读取账号记录', '只读取现有状态，不会发起真实调用。');
     return;
   }
   if (!data?.available) {
-    $("realAccountsSummary").textContent = "暂时无法读取现有账号";
+    for (const id of ['accountPoolTotal','flowAccountReady','geminiAccountReady']) $(id).textContent = '—';
+    for (const id of ['flowAccountTotal','geminiAccountTotal']) $(id).textContent = '/ —';
+    $('flowAccountBalance').textContent = '就绪积分 —';
     $("realAccountTable").innerHTML = empty("账号暂不可读取", data?.message || "请检查 Flow 后台连接。");
     $("saveDispatchPolicy").disabled = true;
     $('geminiSend').disabled = true; // Legacy Gemini sender removed.
@@ -2428,28 +2470,27 @@ function renderAccounts() {
     $("saveDispatchPolicy").disabled = true;
     $("dispatchPolicyMessage").textContent = "规则暂不可读取。";
   }
-  const accounts = applyAccountOrder(Array.isArray(data.items) ? data.items : []);
+  const registered = Array.isArray(data.items) ? data.items : [];
+  const accounts = flow ? registered : applyAccountOrder(registered).filter(item => !item.gemini_removed);
   const flowReadinessNow = flowReadiness(state.snapshot);
   const geminiReadinessNow = geminiReadiness(state.snapshot);
-  const ready = flowReadinessNow.ready ?? "—";
-  const verified = accounts.filter((item) => item.gemini === "verified" && item.gemini_enabled !== false);
-  const selectable = accounts.filter((item) => geminiAccountAvailability(item).manual);
-  const automatic = accounts.filter((item) => geminiAccountAvailability(item).auto);
-  const paused = accounts.filter((item) => item.gemini_enabled === false).length;
   const flowBalance = flowReadinessNow.usableBalance == null ? '—' : flowReadinessNow.usableBalance.toLocaleString('zh-CN');
-  $("realAccountsSummary").innerHTML = `<div class="account-pool-stat"><span>已登记账号</span> <strong>${accounts.length}</strong></div>
-    <div class="account-pool-stat account-pool-stat-flow"><span>Flow 就绪</span> <strong>${ready} <small>/ ${accounts.length}</small></strong> <small>就绪积分 ${flowBalance}${flowReadinessNow.stale ? ' · 显示上次核对结果' : ''}</small></div>
-    <div class="account-pool-stat account-pool-stat-gemini"><span>Gemini 就绪</span> <strong>${geminiReadinessNow.ready ?? '—'} <small>/ ${geminiReadinessNow.total}</small></strong></div>`;
+  $('accountPoolTotal').textContent = registered.length;
+  $('flowAccountReady').textContent = flowReadinessNow.ready ?? '—';
+  $('flowAccountTotal').textContent = '/ ' + registered.length;
+  $('flowAccountBalance').textContent = `就绪积分 ${flowBalance}${flowReadinessNow.stale ? ' · 显示上次核对结果' : ''}`;
+  $('geminiAccountReady').textContent = geminiReadinessNow.ready ?? '—';
+  $('geminiAccountTotal').textContent = '/ ' + geminiReadinessNow.total;
   for (const select of [$("geminiAccount"), $("chatAccount")]) {
-    renderGeminiAccountOptions(select, accounts);
+    renderGeminiAccountOptions(select, applyAccountOrder(registered));
   }
   syncConversationControls(true);
   if (!state.geminiBusy) {
     syncQuickGeminiControls();
-    if (!sessionStorage.getItem("geminiRequest")) $("geminiMessage").textContent = geminiSelectionReady($('geminiAccount').value) ? "请选择账号，输入内容后发送。" : `统一号池共 ${accounts.length} 个账号；不可用的账号已列出原因，请先在账号页核对。`;
+    if (!sessionStorage.getItem("geminiRequest")) $("geminiMessage").textContent = geminiSelectionReady($('geminiAccount').value) ? "请选择账号，输入内容后发送。" : `Gemini 号池共 ${geminiReadinessNow.total} 个账号；不可用的账号已列出原因。`;
   }
   if (!accounts.length) {
-    $("realAccountTable").innerHTML = empty("没有已登记账号", "点击上方“添加本机账号”开始接入。");
+    $("realAccountTable").innerHTML = empty(flow ? "没有已登记的 Flow 账号" : "Gemini 号池暂无账号", "点击上方“添加本机账号”开始接入。");
     return;
   }
   const healthLabels = {ready:"可用", cooling:"冷却中", paused:"已暂停 · 待核查", attention:"需要检查", empty:"积分不足", unknown:"状态未知"};
@@ -2458,6 +2499,7 @@ function renderAccounts() {
   const issueCounts = new Map();
   const affectedAccounts = new Set();
   for (const account of accounts) for (const issue of accountIssues(account,state.snapshot,geminiReadinessNow.rows.get(account.key))) {
+    if (issue.key.startsWith('flow_') !== flow) continue;
     if (['historical_unconfirmed', 'quota_stale', 'gemini_confirmed_verification'].includes(issue.key)) continue;
     if (autoFlowRecoveryProfiles.has(account.profile) && ['flow_unknown','flow_page_state'].includes(issue.key)) continue;
     affectedAccounts.add(account.key);
@@ -2479,7 +2521,8 @@ function renderAccounts() {
     const authControl=auth?.mode!=='login_only' ? '' : auth.state==='waiting' ? '<span class="subtle">请到 Ubuntu 浏览器完成授权</span>' :
       auth.state==='completed' ? '<span class="subtle">授权已更新 · 待验活</span>' :
       auth.can_start ? `<button class="button button-light" type="button" data-govern-reauth="${esc(auth.request_id)}">打开 Ubuntu 授权页</button>` : '';
-    const issues = accountIssues(item,state.snapshot,geminiRow).filter(issue => issue.key !== 'historical_unconfirmed');
+    const issues = accountIssues(item,state.snapshot,geminiRow).filter(issue => issue.key !== 'historical_unconfirmed'
+      && issue.key.startsWith('flow_') === flow);
     const issueBadges = issues.filter(issue => !['quota_stale', 'flow_paused', 'flow_cooling', 'flow_empty', 'flow_unknown', 'unresolved', 'gemini_disabled', 'keepalive_disabled', 'keepalive_paused', 'gemini_confirmed_verification'].includes(issue.key));
     const hasBalance = typeof item.flow_balance === "number" && Number.isFinite(item.flow_balance) && item.flow_balance >= 0;
     const balance = hasBalance ? item.flow_balance.toLocaleString("zh-CN") : "—";
@@ -2525,10 +2568,10 @@ function renderAccounts() {
     // Derive each service's presentation from its own recorded state only.
     const flowNeedsAttention = flowRow?.status==='blocked' && !cooling;
     const geminiNeedsAttention = !item.gemini_removed && geminiCard.attention;
-    const needsAttention = flowNeedsAttention || geminiNeedsAttention;
+    const needsAttention = flow ? flowNeedsAttention : geminiNeedsAttention;
     const geminiLastCheck = item.gemini_enabled === false ? '已暂停' : item.gemini === 'verified' ? '上次已核对' : '待核对';
     const geminiStatusText = item.gemini_removed ? '已从号池删除' : geminiCard.label;
-    const cardState = (flowPaused ? ' is-flow-paused' : cooling ? ' is-flow-cooling' : '') + (needsAttention ? ' is-account-issue' : '');
+    const cardState = (flow && flowPaused ? ' is-flow-paused' : flow && cooling ? ' is-flow-cooling' : '') + (needsAttention ? ' is-account-issue' : '');
     const flowStatusText = pageIncident ? '已停派' : ['flow_landing','login','verification_required'].includes(flowRow?.page) ? '暂不派发'
       : item.flow_preflight_reasons?.length && !flowPaused && !cooling ? '自检未通过' : readinessBadge(flowRow);
     const cooldownSeconds = typeof item.flow_cooldown_seconds === 'number' && Number.isFinite(item.flow_cooldown_seconds) && item.flow_cooldown_seconds > 0 ? item.flow_cooldown_seconds : null;
@@ -2553,25 +2596,24 @@ function renderAccounts() {
     const geminiVerify = (geminiRow && geminiRow.status !== 'ready' && geminiRow.status !== 'queue') ? `<button type="button" class="button button-light" style="margin-top:6px" data-gemini-verify>开始 Gemini 验证</button>` : '';
     const removeGemini = item.gemini_registered && !item.gemini_removed
       ? `<button class="button button-light" type="button" data-remove-gemini="${accountKey}" aria-label="从 Gemini 号池删除 ${esc(identity)}"${item.gemini_busy ? ' disabled title="该账号正在处理 Gemini 请求"' : ''}>删除 Gemini 账号</button>` : '';
-    const flowNotice = flowAccountNoticeMarkup(flowReason, pageIncident ? pageIncident : state.snapshot?.flow_warning_screenshots?.[item.profile]);
-    const diagnostics = [
+    const flowNotice = flow ? flowAccountNoticeMarkup(flowReason, pageIncident || state.snapshot?.flow_warning_screenshots?.[item.profile]) : '';
+    const diagnostics = (flow ? [
       flowReason?.showOnCard ? '' : flowNotice,
       windowIssue && (flowPaused || cooling) ? `<p><strong>Flow：</strong>${esc(windowIssue.title)}</p>` : '',
       flowFallback ? `<p><strong>Flow：</strong>${esc(flowFallback)}</p>` : '',
+    ] : [
       geminiIssues.map(issue => `<p><strong>Gemini · ${esc(issue.title)}</strong><br>${esc(issue.impact || '')} ${esc(issue.action || '')}</p>`).join(''),
       geminiFallback ? `<p><strong>Gemini：</strong>${esc(geminiFallback)}</p>` : '',
-    ].join('');
-    return `<article class="account-card${cardState}" draggable="true" data-drag-key="${esc(quotaKey)}">
-      <div class="account-card-heading">${accountAvatarMarkup(identity, item.gemini_model_options)}<div class="account-identity"><span class="account-alias">${esc(item.label || item.profile)}</span><h3 title="${esc(identity)}">${esc(identity)}</h3></div><span class="account-login ${signIn ? 'is-login-required' : item.flow_login === 'verified' ? 'is-ready' : ''}">${esc(login)}</span>
-        <div class="account-detail-anchor"><details class="account-details"><summary aria-label="查看 ${esc(identity)} 的详细状态" aria-controls="account-detail-${accountKey}">详情</summary></details><div id="account-detail-${accountKey}" class="account-detail-popup"><strong>账号状态详情</strong><p>Flow：${esc(flowStatusText)} · ${esc(freshness + observed)}。${hasBalance ? '剩余 ' + esc(balance) + ' 积分。' : ''}未提供积分总额度。</p>${coolingInfo ? `<p>${esc(coolingInfo)}</p>` : ''}${item.gemini_removed ? '<p>Gemini 已从号池删除，历史对话可在算力中心查看。</p>' : officialDetails(official)}<p>Flow · ${esc(flowPerformance)}</p>${issues.length ? `<div class="account-detail-issues"><strong>状态说明</strong>${issues.map(issue => `<p><b>${esc(issue.title)}</b><br>${esc(issue.impact)} ${esc(issue.action)}</p>`).join('')}</div>` : ''}</div></div></div>
-      <div class="account-services"><div class="account-service account-service-flow${flowNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc(('Flow：' + flowStatusText))}" title="${esc(('Flow：' + flowStatusText))}"><div class="account-service-heading"><span>Flow</span><strong class="account-health ${flowPaused ? 'is-paused' : cooling ? 'is-cooling' : flowRow?.status!=='ready' ? 'is-unknown' : ''}">${esc(flowStatusText)}</strong></div><div class="account-flow-value"><div title="${esc(flowBalanceTitle)}"><strong>${esc(balance)}</strong><small class="account-quota-reset">下次积分到账 ${esc(flowNextCredit || '待官方更新')}${flowNextCredit && !item.flow_balance_fresh ? '（上次读取）' : ''}</small></div>${cooling ? `<div class="account-cooldown" data-risk-paused="${flowPaused}"${cooldownEnd !== null ? ` data-cooldown-end="${cooldownEnd}"` : ' aria-label="冷却中，剩余时间待核对"'}><span class="account-cooldown-time">—</span><span class="account-cooldown-label">冷却中</span></div>` : '<span class="account-credit-icon" aria-hidden="true">✦</span>'}</div></div>
-      <div class="account-service account-service-gemini${geminiNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}" title="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}"><div class="account-service-heading"><span>Gemini</span><strong class="account-health${geminiReady && !geminiNeedsAttention ? '' : ' is-unknown'}">${esc(geminiStatusText)}</strong></div>${item.gemini_removed ? '' : `<div data-account-quota="${accountKey}">${quotaView.html}</div>`}</div></div>
-      ${flowReason?.showOnCard ? flowNotice : ''}
-      ${geminiRow?.checking ? `<p class="account-check-status">Gemini · ${esc(geminiRow.note || '正在检查云端响应')}</p>` : ''}
-      ${diagnostics ? `<details class="account-alert" data-account-fold="alert-${accountKey}"><summary><strong>${flowNeedsAttention || flowPaused || geminiNeedsAttention ? '异常详情' : '状态说明'}</strong><span>${[flowNotice || flowFallback || windowIssue && (flowPaused || cooling) ? 'Flow' : '', geminiIssues.length || geminiFallback ? 'Gemini' : ''].filter(Boolean).join(' · ')}</span></summary><div class="account-alert-body">${diagnostics}</div></details>` : ''}
-      <div class="account-card-footer"><details class="account-retry" data-account-fold="retry-${accountKey}"><summary>切号备用项目</summary><p class="subtle">切号重试将在此账号选定的项目生成，可能消耗积分。未指定时不会用此账号切号。</p><select aria-label="切号备用项目" data-retry-project="${accountKey}"><option value="">不指定</option>${accountProjects.map(p => `<option value="${esc(p.key)}" ${p.key === selectedRetryProject ? 'selected' : ''}>${esc(p.title)} · ${esc(shortId(p.source_id))}</option>`).join('')}</select><button class="text-link" type="button" data-save-retry-project="${accountKey}">保存备用项目</button></details>
-      ${removeGemini ? `<details class="account-preferences" data-account-fold="actions-${accountKey}"><summary>账号操作</summary><div class="account-card-actions">${removeGemini}</div></details>` : ''}</div>
-      <div class="account-card-actions">${govRelease}${authControl}${geminiVerify}${flowPaused ? `<button class="button button-light" type="button" data-resume-flow="${accountKey}"${pageIncident ? ` data-incident="${esc(pageIncident.id)}"` : ''}>已核查，恢复 Flow</button>` : ''}</div></article>`;
+    ]).join('');
+    return `<article class="account-card${cardState}"${flow ? '' : ` draggable="true" data-drag-key="${esc(quotaKey)}"`}>
+      <div class="account-card-heading">${accountAvatarMarkup(identity, flow ? null : item.gemini_model_options)}<div class="account-identity"><span class="account-alias">${esc(item.label || item.profile)}</span><h3 title="${esc(identity)}">${esc(identity)}</h3></div>${flow ? `<span class="account-login ${signIn ? 'is-login-required' : item.flow_login === 'verified' ? 'is-ready' : ''}">${esc(login)}</span>` : ''}
+        <div class="account-detail-anchor"><details class="account-details"><summary aria-label="查看 ${esc(identity)} 的详细状态" aria-controls="account-detail-${accountKey}">详情</summary></details><div id="account-detail-${accountKey}" class="account-detail-popup"><strong>账号状态详情</strong>${flow ? `<p>Flow：${esc(flowStatusText)} · ${esc(freshness + observed)}。${hasBalance ? '剩余 ' + esc(balance) + ' 积分。' : ''}未提供积分总额度。</p>${coolingInfo ? `<p>${esc(coolingInfo)}</p>` : ''}<p>Flow · ${esc(flowPerformance)}</p>` : `${officialDetails(official)}<p>Gemini · ${esc(gemPerformance)}</p>`}${issues.length ? `<div class="account-detail-issues"><strong>状态说明</strong>${issues.map(issue => `<p><b>${esc(issue.title)}</b><br>${esc(issue.impact)} ${esc(issue.action)}</p>`).join('')}</div>` : ''}</div></div></div>
+      <div class="account-services account-services-single">${flow ? `<div class="account-service account-service-flow${flowNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc(('Flow：' + flowStatusText))}" title="${esc(('Flow：' + flowStatusText))}"><div class="account-service-heading"><span>Flow</span><strong class="account-health ${flowPaused ? 'is-paused' : cooling ? 'is-cooling' : flowRow?.status!=='ready' ? 'is-unknown' : ''}">${esc(flowStatusText)}</strong></div><div class="account-flow-value"><div title="${esc(flowBalanceTitle)}"><strong>${esc(balance)}</strong><small class="account-quota-reset">下次积分到账 ${esc(flowNextCredit || '待官方更新')}${flowNextCredit && !item.flow_balance_fresh ? '（上次读取）' : ''}</small></div>${cooling ? `<div class="account-cooldown" data-risk-paused="${flowPaused}"${cooldownEnd !== null ? ` data-cooldown-end="${cooldownEnd}"` : ' aria-label="冷却中，剩余时间待核对"'}><span class="account-cooldown-time">—</span><span class="account-cooldown-label">冷却中</span></div>` : '<span class="account-credit-icon" aria-hidden="true">✦</span>'}</div></div>` : `<div class="account-service account-service-gemini${geminiNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}" title="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}"><div class="account-service-heading"><span>Gemini</span><strong class="account-health${geminiReady && !geminiNeedsAttention ? '' : ' is-unknown'}">${esc(geminiStatusText)}</strong></div>${item.gemini_removed ? '' : `<div data-account-quota="${accountKey}">${quotaView.html}</div>`}</div>`}</div>
+      ${flow && flowReason?.showOnCard ? flowNotice : ''}
+      ${!flow && geminiRow?.checking ? `<p class="account-check-status">Gemini · ${esc(geminiRow.note || '正在检查云端响应')}</p>` : ''}
+      ${diagnostics ? `<details class="account-alert" data-account-fold="alert-${accountKey}"><summary><strong>${needsAttention || flow && flowPaused ? '异常详情' : '状态说明'}</strong><span>${flow ? 'Flow' : 'Gemini'}</span></summary><div class="account-alert-body">${diagnostics}</div></details>` : ''}
+      ${flow ? `<div class="account-card-footer"><details class="account-retry" data-account-fold="retry-${accountKey}"><summary>切号备用项目</summary><p class="subtle">切号重试将在此账号选定的项目生成，可能消耗积分。未指定时不会用此账号切号。</p><select aria-label="切号备用项目" data-retry-project="${accountKey}"><option value="">不指定</option>${accountProjects.map(p => `<option value="${esc(p.key)}" ${p.key === selectedRetryProject ? 'selected' : ''}>${esc(p.title)} · ${esc(shortId(p.source_id))}</option>`).join('')}</select><button class="text-link" type="button" data-save-retry-project="${accountKey}">保存备用项目</button></details></div>` : removeGemini ? `<div class="account-card-footer"><details class="account-preferences" data-account-fold="actions-${accountKey}"><summary>账号操作</summary><div class="account-card-actions">${removeGemini}</div></details></div>` : ''}
+      <div class="account-card-actions">${flow ? govRelease : authControl+geminiVerify}${flow && flowPaused ? `<button class="button button-light" type="button" data-resume-flow="${accountKey}"${pageIncident ? ` data-incident="${esc(pageIncident.id)}"` : ''}>已核查，恢复 Flow</button>` : ''}</div></article>`;
   }).join("")}</div>`;
   updateAccountUsageBars();
   updateAccountCooldowns();
@@ -2583,6 +2625,10 @@ function renderAccounts() {
   }
   if (focusedDetail) document.querySelector(`[aria-controls="${focusedDetail}"]`)?.focus({preventScroll:true});
 }
+
+try {
+  if (localStorage.getItem('accountPoolService') === 'gemini') selectAccountPool('gemini');
+} catch (_) {}
 
 async function removeGeminiAccountFromPanel(button) {
   const accountKey = button.dataset.removeGemini;
@@ -3125,9 +3171,7 @@ $("realAccountTable").addEventListener("click", async (event) => {
   if (geminiVerifyButton) {
     geminiVerifyButton.disabled = true;
     try {
-      await postJson('/api/flow-readiness', {});
-      $("accountActionMessage").textContent = '正在核对；请在 Ubuntu 对应账号窗口完成 Google 验证。';
-      if (typeof startGovernanceAudit === 'function') void startGovernanceAudit('gemini', true);
+      $("accountActionMessage").textContent = '正在核对 Gemini 授权和额度。';
       openGovernance('gemini');
     } catch (error) { $("accountActionMessage").textContent = error.message || '检查未完成。'; }
     finally { geminiVerifyButton.disabled = false; }
@@ -4790,6 +4834,7 @@ $('geminiConcurrencyForm')?.addEventListener('submit', async event => {
   }
 });
 $('overviewSchedule').addEventListener('click', () => {
+  selectAccountPool('gemini');
   setView('accounts');
   if (activationSchedulePanel.hidden) $('activationScheduleToggle').click();
   $('activationScheduleToggle').focus({preventScroll:true});
