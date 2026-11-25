@@ -2,10 +2,11 @@
 
 const $ = id => document.getElementById(id);
 const selected = new Set();
-const actions = ['open', 'install', 'sync'];
+const actions = ['open', 'install', 'check', 'sync'];
 const instructions = {
   open: '请在对应窗口确认 Flow 登录。',
-  install: '请按「插件安装指引」安装或重新加载插件。',
+  install: '请按安装向导在各 Chrome 用户中确认加载或重载。',
+  check: '连接检查结果将显示在「插件状态」，此操作不会同步登录信息。',
   sync: '同步结果将逐个更新，请以 Ubuntu 登录核对结果为准。',
 };
 const syncLabels = {
@@ -24,6 +25,8 @@ let visibleProfiles = [];
 let ubuntuProfiles = null;
 let rosterStatus = 'loading';
 let restriction = '';
+let installReady = false;
+let canCheck = false;
 let busy = false;
 let activeRefresh = null;
 let rosterRefresh = null;
@@ -49,6 +52,10 @@ async function request(path, body) {
   return data;
 }
 
+function pendingInstalls() {
+  return ubuntuProfiles ? profiles.filter(p => ubuntuProfiles.get(p.profile) === p.email && p.plugin !== 'registered').map(p => p.profile) : [];
+}
+
 function renderSelection() {
   const allVisible = visibleProfiles.length > 0 && visibleProfiles.every(item => selected.has(item.profile));
   const hidden = selected.size - visibleProfiles.filter(item => selected.has(item.profile)).length;
@@ -61,8 +68,12 @@ function renderSelection() {
   $('clear').hidden = !selected.size;
   $('clear').disabled = busy;
   for (const action of actions) {
-    $(action).disabled = busy || !selected.size || (action === 'sync' && Boolean(restriction));
+    $(action).disabled = busy || !selected.size || (action === 'sync' && Boolean(restriction))
+      || (action === 'install' && !installReady) || (action === 'check' && !canCheck);
   }
+  const pending = pendingInstalls().length;
+  $('install-missing').disabled = busy || !pending || !installReady;
+  $('install-missing').textContent = pending ? `打开 ${pending} 个待安装账号的扩展页` : '没有待安装的 Ubuntu 账号';
   for (const box of $('rows').querySelectorAll('[data-profile]')) {
     box.disabled = busy;
     box.checked = selected.has(box.dataset.profile);
@@ -92,10 +103,13 @@ function renderAccounts() {
   $('rows').innerHTML = visibleProfiles.map(p => {
     const name = String(p.name || p.profile);
     const initial = Array.from(name.trim())[0]?.toUpperCase() || '·';
-    const plugin = p.plugin === 'registered';
+    const pluginCheck = p.last_plugin_check;
+    const ready = p.plugin === 'registered' && pluginCheck?.status === 'succeeded';
+    const [pluginLabel, pluginTone] = ready ? ['连接检查通过', 'success']
+      : ({registered:['已加载待核对', ''],missing:['未安装', 'warn'],
+          broken:['插件文件缺失', 'error'],disabled:['插件未启用', 'warn']}[p.plugin] || ['状态待核对', '']);
     const [jobText, jobTone] = syncLabels[p.last_job?.status] || ['未发起', ''];
-    const pluginNote = p.plugin_note === restriction || p.plugin_note === '未找到插件登记' ? ''
-      : p.plugin_note === '已登记，运行状态待连接确认' ? '运行状态待确认' : p.plugin_note;
+    const pluginNote = p.plugin === 'registered' ? pluginCheck?.message : (p.plugin === 'missing' ? '' : p.plugin_note);
     return `<tr><td><label class="check-target">
       <input type="checkbox" data-profile="${esc(p.profile)}" aria-label="选择 ${esc(name)}（${esc(p.profile)}）">
     </label></td>
@@ -103,7 +117,7 @@ function renderAccounts() {
       <strong>${esc(name)}</strong><small>${esc(p.email || '未登记 Chrome 邮箱')}</small>
       <small class="profile-directory">${esc(p.profile)}</small>
     </div></div></td>
-    <td><span class="cell-label">插件状态</span><span class="pill ${plugin ? 'success' : 'warn'}">${plugin ? '已登记' : '未登记'}</span>
+    <td><span class="cell-label">插件状态</span><span class="pill ${pluginTone}">${pluginLabel}</span>
       ${pluginNote ? `<small class="row-detail">${esc(pluginNote)}</small>` : ''}</td>
     <td><span class="cell-label">同步结果</span><span class="pill ${jobTone}">${jobText}</span>
       ${p.last_job?.message ? `<small class="row-detail">${esc(p.last_job.message)}</small>` : ''}</td></tr>`;
@@ -123,7 +137,7 @@ async function readProfiles() {
     const result = await request('/api/profiles');
     const list = result.profiles;
     if (!Array.isArray(list)) throw new Error('本机账号数据暂不可用。');
-    const nextFingerprint = JSON.stringify(list);
+    const nextFingerprint = JSON.stringify([list,result.extension,result.extension_folder]);
     $('folder').value = result.extension_folder || '';
     $('copy').disabled = !$('folder').value;
     if (fingerprint === nextFingerprint && !loadError) return true;
@@ -131,7 +145,9 @@ async function readProfiles() {
     fingerprint = nextFingerprint;
     profiles = list;
     const note = list[0]?.plugin_note;
-    restriction = bridgeRestrictions.has(note) && list.every(p => p.plugin_note === note) ? note : '';
+    restriction = result.extension?.note || (bridgeRestrictions.has(note) && list.every(p => p.plugin_note === note) ? note : '');
+    installReady = result.extension?.install_ready ?? Boolean(result.extension_folder);
+    canCheck = result.extension?.can_check === true;
     $('restriction').textContent = restriction;
     $('restriction').hidden = !restriction;
     const known = new Set(list.map(p => p.profile));
@@ -172,16 +188,16 @@ function refreshUbuntuProfiles() {
   return rosterRefresh;
 }
 
-async function run(action) {
-  if (busy || !selected.size || (action === 'sync' && restriction)) return;
+async function run(action, targets = [...selected], button = $(action)) {
+  if (busy || !targets.length || (action === 'sync' && restriction)
+      || (action === 'install' && !installReady) || (action === 'check' && !canCheck)) return;
   busy = true;
-  const button = $(action);
   const label = button.textContent;
   button.textContent = '正在打开窗口…';
   renderSelection();
   showStatus('正在打开所选账号的 Chrome 窗口…');
   try {
-    const result = await request('/api/open', {action, profiles:[...selected]});
+    const result = await request('/api/open', {action, profiles:targets});
     showStatus(`已打开 ${result.opened.length} 个账号窗口。${instructions[action]}`);
     if (action === 'install') $('plugin-help').open = true;
     await refresh();
@@ -224,6 +240,7 @@ $('all').onclick = () => {
 };
 $('clear').onclick = () => { selected.clear(); renderSelection(); $('all').focus(); };
 for (const action of actions) $(action).onclick = () => run(action);
+$('install-missing').onclick = () => run('install', pendingInstalls(), $('install-missing'));
 $('copy').onclick = async () => {
   try {
     await navigator.clipboard.writeText($('folder').value);

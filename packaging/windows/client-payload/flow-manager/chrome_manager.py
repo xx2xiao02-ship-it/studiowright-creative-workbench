@@ -20,6 +20,8 @@ JOBS = {}
 LOCK = threading.Lock()
 LAUNCH_LOCK = threading.Lock()
 LAST_LAUNCH = 0.0
+SYNC_BLOCK_REASON = ''
+PLUGIN_CHECK_SUPPORTED = False
 
 
 def ubuntu_profile_matches(local_profiles):
@@ -65,11 +67,33 @@ def profiles(root=USER_DATA):
                 extension = settings.get(EXTENSION_ID) or extension
             except (OSError, ValueError):
                 pass
+        plugin, note = profile_plugin_state(root/name, extension)
+        jobs = [(n, job) for n, job in reversed(list(JOBS.items())) if job['profile']==name]
         result.append({'profile': name, 'name': info.get('name', name), 'email': info.get('user_name', ''),
-                       'plugin': 'registered' if extension else 'missing',
-                       'plugin_note': '已登记，运行状态待连接确认' if extension else '未找到插件登记',
-                       'last_job': next((dict(j, nonce=n) for n,j in reversed(list(JOBS.items())) if j['profile']==name), None)})
+                       'plugin': plugin, 'plugin_note': note,
+                       'last_job': next((dict(j, nonce=n) for n,j in jobs if j.get('action')!='check'), None),
+                       'last_plugin_check': next((dict(j, nonce=n) for n,j in jobs if j.get('action')=='check'), None)})
     return result
+
+
+def profile_plugin_state(profile, entry):
+    if not isinstance(entry, dict):
+        return 'missing', '未找到插件登记'
+    path = entry.get('path')
+    if not isinstance(path, str) or not path:
+        return 'broken', '已登记的插件文件找不到，请重新加载正确的插件文件夹。'
+    folder = Path(path)
+    if not folder.is_absolute():
+        folder = profile/'Extensions'/EXTENSION_ID/folder
+    if not (folder/'manifest.json').is_file():
+        return 'broken', '已登记的插件文件找不到，请重新加载正确的插件文件夹。'
+    if entry.get('state') == 0 or entry.get('disable_reasons'):
+        return 'disabled', '请在这个 Chrome 用户的扩展页启用插件。'
+    return 'registered', '已登记，运行状态待连接确认'
+
+
+def install_ready():
+    return not SYNC_BLOCK_REASON and (EXTENSION/'manifest.json').is_file()
 
 
 def chrome_path():
@@ -132,7 +156,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(file.read_bytes(),mime='text/html; charset=utf-8' if self.path=='/' else 'text/javascript; charset=utf-8')
         if self.path=='/health': return self.reply({'application':'studiowright-chrome-manager'})
         if self.path=='/api/profiles':
-            with LOCK: return self.reply({'profiles':profiles(), 'extension_folder':str(EXTENSION)})
+            with LOCK: local=profiles()
+            return self.reply({'profiles':local, 'extension_folder':str(EXTENSION) if install_ready() else '',
+                               'extension':{'install_ready':install_ready(), 'can_check':PLUGIN_CHECK_SUPPORTED,
+                                            'note':SYNC_BLOCK_REASON or ('' if install_ready() else '插件文件夹缺失，请重新安装 StudioWright 桌面版。')}})
         if self.path=='/api/registered-profiles':
             with LOCK:
                 local = profiles()
@@ -155,10 +182,14 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=='/api/open':
                 if self.headers.get('Origin')!=ORIGIN: return self.reply({'error':'请在本机账号管理中操作'},403)
                 selected=body.get('profiles',[]);action=body.get('action')
-                if not isinstance(selected,list) or not 1<=len(selected)<=50 or action not in ('install','sync','open'):
+                if not isinstance(selected,list) or not 1<=len(selected)<=50 or action not in ('install','sync','open','check'):
                     raise ValueError('请勾选账号并选择操作')
-                if action=='sync' and globals().get('SYNC_BLOCK_REASON'):
+                if action=='sync' and SYNC_BLOCK_REASON:
                     raise ValueError(SYNC_BLOCK_REASON)
+                if action=='install' and not install_ready():
+                    raise ValueError(SYNC_BLOCK_REASON or '插件文件夹缺失，请重新安装 StudioWright 桌面版。')
+                if action=='check' and not PLUGIN_CHECK_SUPPORTED:
+                    raise ValueError('当前 Ubuntu 后台未启用新版插件连接检查。')
                 known={p['profile'] for p in profiles()}
                 if any(p not in known for p in selected): raise ValueError('账号列表已变化，请刷新')
                 launched=[]
@@ -170,7 +201,8 @@ class Handler(BaseHTTPRequestHandler):
                     nonce=secrets.token_urlsafe(32)
                     with LOCK:
                         for old in [n for n,j in JOBS.items() if j['expires']<time.time()]: del JOBS[old]
-                        JOBS[nonce]={'profile':profile,'status':'waiting','message':'等待窗口连接插件','expires':time.time()+1200}
+                        JOBS[nonce]={'profile':profile,'status':'waiting','message':'等待窗口连接插件',
+                                     'action':action,'extension_id':EXTENSION_ID,'expires':time.time()+1200}
                     open_profile(profile,BACKEND+'/#chrome-job='+nonce);launched.append(profile)
                 return self.reply({'opened':launched})
             if self.path.startswith('/api/job/'):

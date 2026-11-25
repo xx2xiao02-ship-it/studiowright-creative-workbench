@@ -25,17 +25,17 @@ def selected_bridge():
             info = json.load(response)
         if info.get('application') != 'studiowright-console':
             raise ValueError()
-        return info.get('bridge_id')
+            return info.get('bridge_id'), info.get('bridge_check') is True
     except HTTPError as error:
         try:
             value = json.load(error)
             if error.code == 401 and value.get('error') == 'API Key 无效或已撤销。':
-                return OLD_ID
+                return OLD_ID, False
         except (OSError, ValueError):
             pass
-        return None
+        return None, False
     except (OSError, ValueError):
-        return None
+        return None, False
 
 
 def main():
@@ -51,27 +51,18 @@ def main():
     import hashlib
     public = base64.b64decode(packaged['key'])
     new_id = ''.join(chr(ord('a') + int(c, 16)) for c in hashlib.sha256(public).hexdigest()[:32])
-    selected = selected_bridge()
+    selected, supports_check = selected_bridge()
     manager.EXTENSION_ID = selected or new_id
-    manager.EXTENSION = LEGACY if selected == OLD_ID and LEGACY.is_dir() else ROOT / 'extension'
+    manager.EXTENSION = LEGACY if selected == OLD_ID else ROOT / 'extension'
     if selected is None:
         manager.SYNC_BLOCK_REASON = '未能确认后台版本，请检查连接后再操作。'
-    elif selected == OLD_ID and not LEGACY.is_dir():
+    elif selected == OLD_ID and not (LEGACY / 'manifest.json').is_file():
         manager.SYNC_BLOCK_REASON = '现有后台需要原版插件；请先使用后台远程登录。'
     elif selected not in (OLD_ID, new_id):
         manager.SYNC_BLOCK_REASON = '当前账号助手与后台版本不匹配，请核对安装包。'
     else:
         manager.SYNC_BLOCK_REASON = ''
-    original_profiles = manager.profiles
-
-    def profiles(root=None):
-        result = original_profiles() if root is None else original_profiles(root)
-        if manager.SYNC_BLOCK_REASON:
-            for entry in result:
-                entry['plugin_note'] = manager.SYNC_BLOCK_REASON
-        return result
-
-    manager.profiles = profiles
+    manager.PLUGIN_CHECK_SUPPORTED = selected == new_id and supports_check and not manager.SYNC_BLOCK_REASON
     with ThreadingHTTPServer(('127.0.0.1', 18890), manager.Handler) as server:
         server.serve_forever()
 

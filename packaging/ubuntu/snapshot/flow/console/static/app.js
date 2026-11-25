@@ -175,15 +175,15 @@ document.addEventListener('click',e=>{const b=e.target.closest('[data-material]'
 $('materialDialog').addEventListener('close',()=>{$('materialPreview').innerHTML='';selectedMaterial=null;materialOpenRequest++;materialDirty=false;});
 $('materialTagForm').onsubmit=async e=>{e.preventDefault();if(!selectedMaterial||materialSaving)return;const ident=selectedMaterial.id;const tags=splitMaterialTags($('materialTags').value),structured_tags=Object.fromEntries(Object.keys(materialDimensions).map(d=>[d,splitMaterialTags($('edit-'+d).value)]));const snapshot=JSON.stringify({tags,structured_tags});materialSaving=true;await withButton(e.submitter,async()=>{try{const result=await api('/api/library/'+ident+'/tags',{tags,structured_tags});if(selectedMaterial?.id===ident){selectedMaterial=result.item;const current=JSON.stringify({tags:splitMaterialTags($('materialTags').value),structured_tags:Object.fromEntries(Object.keys(materialDimensions).map(d=>[d,splitMaterialTags($('edit-'+d).value)]))});materialDirty=current!==snapshot;$('materialTagStatus').textContent=materialDirty?'已保存提交时的标签；你后续输入的修改还未保存。':'七类标签与自定义标签已保存。';}loadLibrary(libraryPage);}catch(e){$('materialTagStatus').textContent=e.message;}finally{materialSaving=false;}});};
 
+const localBridgeIds=['aaipdbnbbgeadlodajhcobjmomnemclj','kbnibljeinmjmmpholicjkaiehmilbbk'];
 let pluginPairRunning=false;
 async function connectLocalPlugin(){
  if(pluginPairRunning)return;
  pluginPairRunning=true;$('pluginPairDialog').showModal();$('pluginPairStatus').textContent='正在连接当前浏览器用户的插件…';$('pluginPairHelp').textContent='只保存连接配置，不上传 Google 登录信息，不提交生成。';$('pluginPairRetry').disabled=true;$('pairPlugin').disabled=true;
  try{
-  if(!globalThis.chrome?.runtime?.sendMessage)throw new Error('当前浏览器没有提供插件连接接口。请在安装了 Flow2API 插件的 Chrome 用户窗口中打开此后台；内置浏览器或未装插件的用户窗口不能连接。');
-  const config=await api('/api/bridge/pair',{});
-  const response=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('插件 12 秒内未响应。请在当前 Chrome 用户的扩展管理页重新加载 Flow2API 插件，然后刷新后台重试。')),12000);try{chrome.runtime.sendMessage(config.extensionId,{action:'sw_pair',config},reply=>{clearTimeout(timer);const error=chrome.runtime.lastError;if(error)reject(new Error('插件连接未建立：'+error.message+'。请确认当前 Chrome 用户已启用 Flow2API 插件，并重新加载插件后刷新页面。'));else resolve(reply);});}catch(e){clearTimeout(timer);reject(e);}});
-  if(!response?.ok)throw new Error(response?.error||'插件未确认连接。请重新加载现有 Flow2API 插件后重试。');
+  const extensionId=await findLocalBridge();
+  const config=await api('/api/bridge/pair',{extensionId});
+  await pluginCommand(extensionId,{action:'sw_pair',config});
   $('pluginPairStatus').textContent='连接成功：已保存到本机共享配置。';$('pluginPairHelp').textContent='下一步：打开该 Chrome 用户的 Flow 页面，点击插件图标，在插件内点击“同步到 StudioWright”。本按钮只连接插件，不会自动上传账号。';
  }catch(e){$('pluginPairStatus').textContent='连接未完成：'+e.message;$('pluginPairHelp').textContent='当前页面未采集或上传 Google 登录信息。若提示本机共享组件不可用，需要修复插件的本机组件。';}
  finally{pluginPairRunning=false;$('pluginPairRetry').disabled=false;$('pairPlugin').disabled=false;}
@@ -193,7 +193,17 @@ $('pairPlugin').onclick=()=>{window.open('http://127.0.0.1:18890/','_blank','noo
 setupLibraryTools();
 setupAccountInsights();
 
-function pluginCommand(id,message,timeout=15000){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('插件响应超时')),timeout);try{if(!globalThis.chrome?.runtime?.sendMessage)throw Error('当前窗口尚未接通插件');chrome.runtime.sendMessage(id,message,result=>{clearTimeout(timer);const error=chrome.runtime.lastError;if(error)reject(Error('插件未接通，请安装或重新加载 1.4.2'));else if(!result?.ok)reject(Error(result?.error||'插件未响应'));else resolve(result);});}catch(e){clearTimeout(timer);reject(e);}});}
+function pluginCommand(id,message,timeout=15000){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('插件响应超时')),timeout);try{if(!globalThis.chrome?.runtime?.sendMessage)throw Error('当前窗口尚未接通插件');chrome.runtime.sendMessage(id,message,result=>{clearTimeout(timer);const error=chrome.runtime.lastError;if(error)reject(Error('插件未接通，请在该 Chrome 用户中安装或重新加载'));else if(!result?.ok)reject(Error(result?.error||'插件未响应'));else resolve(result);});}catch(e){clearTimeout(timer);reject(e);}});}
+
+async function findLocalBridge(){
+ if(!globalThis.chrome?.runtime?.sendMessage)throw Error('请在对应的 Chrome 用户窗口打开后台，再确认插件已启用。');
+ for(const id of localBridgeIds){
+  try{await pluginCommand(id,{action:'sw_probe'},2500);return id;}
+  catch{}
+ }
+ throw Error('未检测到插件，请在该 Chrome 用户中安装或重新加载。');
+}
+
 async function runChromeJob(nonce){
  const statusText=$('chromeImportStatus');
  const help=$('chromeImportHelp');
@@ -223,22 +233,34 @@ async function runChromeJob(nonce){
    return;
   }
   started=true;
+  if(job.action==='check'){
+   if(!localBridgeIds.includes(job.extension_id))throw Error('安装检查链接无效，请从本机账号管理重新发起。');
+   statusText.textContent='正在检查插件和 Windows 共享组件…';
+   const probe=await pluginCommand(job.extension_id,{action:'sw_probe'},5000);
+   if(probe.nativeReady===undefined)throw Error('当前插件版本尚不支持连接检查，请重新加载新版账号助手。');
+   if(probe.nativeReady!==true)throw Error('插件已加载，Windows 共享组件未接通。请修复 StudioWright 桌面版后再检查。');
+   const message=probe.connected ? '插件和共享组件可用，可以发起同步。' : '插件和共享组件可用，首次同步时会连接 Ubuntu。';
+   await report('succeeded',message);
+   showResult(message);
+   return;
+  }
   statusText.textContent='正在连接 Chrome 插件（'+job.profile+'）…';
   help.textContent='如尚未安装插件，请在此 Chrome 用户下安装或重新加载插件。连接成功后会自动继续。';
-  let ready=false;
-  for(let i=0;i<75;i++){
-   try{await pluginCommand('kbnibljeinmjmmpholicjkaiehmilbbk',{action:'sw_probe'},3000);ready=true;break;}
+  let extensionId;
+  const deadline=Date.now()+600000;
+  while(Date.now()<deadline){
+   try{extensionId=await findLocalBridge();break;}
    catch(e){await report('waiting',e.message);await new Promise(resolve=>setTimeout(resolve,8000));}
   }
-  if(!ready)throw Error('等待插件超过 10 分钟，请安装后从本机账号管理重新同步。');
-  const config=await api('/api/bridge/pair',{});
-  await pluginCommand(config.extensionId,{action:'sw_pair',config});
+  if(!extensionId)throw Error('等待插件超过 10 分钟，请安装后从本机账号管理重新同步。');
+  const config=await api('/api/bridge/pair',{extensionId});
+  await pluginCommand(extensionId,{action:'sw_pair',config});
   await report('running','插件已连接，正在同步并核对账号');
   statusText.textContent='正在同步 Flow 登录并核对实际邮箱…';
   help.textContent='请保持此窗口打开，直到显示导入结果。';
-  const result=await pluginCommand(config.extensionId,{action:'sw_sync'},180000);
+  const result=await pluginCommand(extensionId,{action:'sw_sync'},180000);
   const message=result.message||'后台仍在核对，请在创作工作台的任务队列查看。';
-  const confirmed=message.startsWith('Ubuntu 登录核对成功：');
+  const confirmed=result.status==='confirmed' || (!result.status && message.startsWith('Ubuntu 登录核对成功：'));
   await report(confirmed?'succeeded':'running',message);
   showResult(message,confirmed);
  }catch(e){

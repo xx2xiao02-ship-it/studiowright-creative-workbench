@@ -7,6 +7,17 @@ async function swNative(action, config) {
     return result.config;
 }
 
+async function swConnectionStatus() {
+    const version = chrome.runtime.getManifest().version;
+    try {
+        const config = await swNative('sw_get');
+        return {ok:true, version, nativeReady:true,
+            connected:config?.apiUrl === 'http://127.0.0.1:18888/api/plugin/session'};
+    } catch {
+        return {ok:true, version, nativeReady:false, connected:false};
+    }
+}
+
 async function swRequest(config, path, body) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 60000);
@@ -105,6 +116,37 @@ async function swFindFlowAccount(expected) {
     throw new Error('所选 Chrome 用户的 Flow 页面未正常加载或未登录，已停止采集。');
 }
 
+async function swCheckReceipt(config, receipt) {
+    const pending = 'Ubuntu 已接收，仍在核对。请在 StudioWright 任务队列查看结果。';
+    for (let i = 0; i < 70; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        let state;
+        try {
+            state = await swRequest(config, '/' + encodeURIComponent(receipt.id));
+        } catch {
+            const message = 'Ubuntu 已接收，核对连接中断。再次点击同步会查询原回执。';
+            await chrome.storage.local.set({swLast:{...receipt,message}});
+            return {ok:true, status:'pending', message};
+        }
+        if (state.status === 'succeeded') {
+            if (swNormalizeEmail(state.email) !== receipt.email) {
+                const error = new Error('Ubuntu 核对的邮箱与所选账号不一致，不能报告同步成功，请检查任务队列。');
+                error.terminalReceipt = true;
+                throw error;
+            }
+            const message = 'Ubuntu 登录核对成功：' + state.email;
+            await chrome.storage.local.set({swLast:{...receipt,status:'success',time:Date.now(),message}});
+            return {ok:true, status:'confirmed', message};
+        }
+        if (['failed','interrupted','cancelled'].includes(state.status)) {
+            const error = new Error(state.error || 'Ubuntu 未能确认登录，请使用后台的远程登录。');
+            error.terminalReceipt = true;
+            throw error;
+        }
+    }
+    return {ok:true, status:'pending', message:pending};
+}
+
 async function swSync(expectedEmail = '') {
     if (swSyncRunning) throw new Error('此窗口正在同步，请等待结果。');
     swSyncRunning = true;
@@ -125,6 +167,11 @@ async function swSync(expectedEmail = '') {
         } else {
             email = await swFindFlowAccount(expectedEmail);
         }
+        const last = (await chrome.storage.local.get('swLast')).swLast;
+        if (last?.status === 'pending' && last.id) {
+            if (last.email !== email) return {ok:false,error:'这个 Chrome 用户还有另一账号的同步待核对，请先查看任务队列。'};
+            return await swCheckReceipt(config, last);
+        }
         const allowed = new Set(['google.com', 'flow.google.com', 'accounts.google.com', 'www.google.com']);
         const all = await chrome.cookies.getAll({domain:'google.com'});
         const cookies = all.filter(c => allowed.has(c.domain.replace(/^\./,'')) && (!c.expirationDate || c.expirationDate > Date.now()/1000))
@@ -141,28 +188,15 @@ async function swSync(expectedEmail = '') {
         if (typeof result?.id !== 'string' || !result.id) {
             throw new Error('请求结果尚未确认，请先查看 StudioWright 任务队列，不要重复采集。');
         }
-        await chrome.storage.local.set({swLast:{status:'pending',email,id:result.id,time:Date.now(),message:'已接收，正在 Ubuntu 核对实际邮箱。'}});
-        for (let i = 0; i < 70; i++) {
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            let state;
-            try {
-                state = await swRequest(config, '/' + result.id);
-            } catch (error) {
-                throw new Error('请求已提交但核对中断，结果未确认；请先查看 StudioWright 任务队列，不要重复采集。');
-            }
-            if (state.status === 'succeeded') {
-                if (swNormalizeEmail(state.email) !== email) {
-                    throw new Error('Ubuntu 核对的邮箱与所选账号不一致，不能报告同步成功，请检查任务队列。');
-                }
-                const message = 'Ubuntu 登录核对成功：' + state.email;
-                await chrome.storage.local.set({swLast:{status:'success',email:state.email,time:Date.now(),message}});
-                return {ok:true, message};
-            }
-            if (['failed','interrupted','cancelled'].includes(state.status)) throw new Error(state.error || 'Ubuntu 未能确认登录，请使用后台的远程登录。');
-        }
-        return {ok:true, message:'后台仍在检查，结果请在 StudioWright 任务队列查看。'};
+        const receipt = {status:'pending',email,id:result.id,time:Date.now(),message:'已接收，正在 Ubuntu 核对实际邮箱。'};
+        await chrome.storage.local.set({swLast:receipt});
+        return await swCheckReceipt(config, receipt);
     } catch (error) {
-        await chrome.storage.local.set({swLast:{status:'error',time:Date.now(),message:error.message}});
+        const previous = (await chrome.storage.local.get('swLast')).swLast;
+        const failure = previous?.status === 'pending' && previous.id && !error.terminalReceipt
+            ? {...previous,message:error.message}
+            : {status:'error',time:Date.now(),message:error.message};
+        await chrome.storage.local.set({swLast:failure});
         throw error;
     } finally {
         swSyncRunning = false;
@@ -172,7 +206,7 @@ async function swSync(expectedEmail = '') {
 chrome.runtime.onMessage.addListener((request, sender, respond) => {
     if (request?.action !== 'sw_sync' && request?.action !== 'sw_status') return false;
     const promise = request.action === 'sw_sync' ? swSync() :
-        Promise.all([swNative('sw_get'), chrome.storage.local.get('swLast')]).then(([config,data]) => ({ok:true,connected:!!config,last:data.swLast}));
+        Promise.all([swConnectionStatus(), chrome.storage.local.get('swLast')]).then(([state,data]) => ({...state,last:data.swLast}));
     promise.then(respond).catch(error => respond({ok:false,error:error.message}));
     return true;
 });
@@ -183,8 +217,8 @@ chrome.runtime.onMessageExternal.addListener((request, sender, respond) => {
         respond({ok:false,error:'仅允许本机 StudioWright 后台连接。'});
         return false;
     }
-    if (request.action === 'sw_probe') { respond({ok:true,version:'1.0.0'}); return false; }
-    const promise = request.action === 'sw_sync' ? swExpectedFromJob(sender).then(expected => swSync(expected)) :
+    const promise = request.action === 'sw_probe' ? swConnectionStatus() :
+        request.action === 'sw_sync' ? swExpectedFromJob(sender).then(expected => swSync(expected)) :
         swNative('sw_set',request.config).then(() => ({ok:true}));
     promise.then(respond).catch(error => respond({ok:false,error:error.message}));
     return true;

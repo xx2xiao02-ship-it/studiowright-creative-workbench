@@ -40,7 +40,10 @@ KINDS = {"sync", "login", "media", "doctor", "quote", "image", "video"}
 TERMINAL_INPUT_STOPS = frozenset(('pasted_text_mismatch', 'prompt_input_timeout'))
 RETRYABLE_INPUT_STOPS = frozenset(('pre_submit_failed:pointer_not_over_input', 'pre_submit_failed:desktop_keyboard_authorization_timeout', 'window_focus_lost', 'composer_unavailable', 'window_activation_unconfirmed'))
 WAITING_FOR_PROXY = '等待已确认空闲的专属代理。分配后，原同步任务会自动继续核对。'
-BRIDGE_ID = 'kbnibljeinmjmmpholicjkaiehmilbbk'
+BRIDGE_LEGACY_ID = 'kbnibljeinmjmmpholicjkaiehmilbbk'
+BRIDGE_ID = 'aaipdbnbbgeadlodajhcobjmomnemclj'
+BRIDGE_IDS = (BRIDGE_ID, BRIDGE_LEGACY_ID)
+BRIDGE_ORIGINS = frozenset('chrome-extension://' + ident for ident in BRIDGE_IDS)
 BALANCE_SWEEP_SECONDS = 300
 BALANCE_RETRY_DELAYS = (10, 25)
 
@@ -798,7 +801,7 @@ def create_app(root, adapter, test=False):
 
     async def health(request):
         return JSONResponse({"ok": True, "application": "studiowright-console", "test": test,
-                             "bridge_id": BRIDGE_ID, "source_version": os.getenv('SW_SOURCE_VERSION'),
+                             "bridge_id": BRIDGE_ID, "bridge_check": True, "source_version": os.getenv('SW_SOURCE_VERSION'),
                              "source_commit": os.getenv('SW_SOURCE_COMMIT')}, headers={"Cache-Control": "no-store"})
 
     async def payload(request, *, allow_empty=False):
@@ -1304,6 +1307,13 @@ def create_app(root, adapter, test=False):
         return JSONResponse({"ok": bool(found)}, status_code=200 if found else 404)
 
     async def bridge_pair(request):
+        try:
+            data = await payload(request, allow_empty=True)
+            extension = data.get('extensionId', BRIDGE_LEGACY_ID)
+            if set(data) - {'extensionId'} or extension not in BRIDGE_IDS:
+                raise ValueError('不支持此插件，请在本机账号管理中核对安装版本。')
+        except (ValueError, TypeError) as exc:
+            return JSONResponse({'error': safe_error(exc)}, status_code=400)
         token = secrets.token_urlsafe(40)
         c.store.execute(
             "INSERT INTO bridge_devices VALUES(?,?)", (c.store.digest(token), time.time())
@@ -1312,7 +1322,7 @@ def create_app(root, adapter, test=False):
             {
                 "apiUrl": "http://127.0.0.1:18888/api/plugin/session",
                 "connectionToken": token,
-                "extensionId": BRIDGE_ID,
+                "extensionId": extension,
             }
         )
 
@@ -1608,7 +1618,7 @@ def create_app(root, adapter, test=False):
                 origin
                 and origin != "http://" + host
                 and not (
-                    plugin_auth and origin == "chrome-extension://" + BRIDGE_ID
+                    plugin_auth and origin in BRIDGE_ORIGINS
                 )
             ):
                 return JSONResponse({"error": "请从后台页面发起操作。"}, status_code=403)

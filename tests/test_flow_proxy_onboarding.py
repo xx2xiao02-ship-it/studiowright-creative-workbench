@@ -72,6 +72,32 @@ class WindowsProxyOnboarding(unittest.TestCase):
         self.assertEqual(response.status_code, 202, response.text)
         return response.json()
 
+    def test_current_and_legacy_plugins_can_pair_but_unknown_origins_cannot_import(self):
+        with TestClient(self.client.app, client=('127.0.0.1', 32100)) as client:
+            probe = client.get('/health', headers={'X-Studiowright-Probe': '1',
+                                                    'Authorization': 'Bearer sw-readonly-probe'})
+        self.assertEqual(probe.json().get('bridge_id'), server.BRIDGE_ID)
+        self.assertIs(probe.json().get('bridge_check'), True)
+        self.assertNotIn('set-cookie', probe.headers)
+        session, _ = server.WebAuth(self.store).new_session(False)
+        self.client.cookies.set('sw_console_fixture', session)
+        pair_headers = {'X-Console-Request': '1'}
+        legacy = self.client.post('/api/bridge/pair', headers=pair_headers, json={})
+        self.assertEqual(legacy.json().get('extensionId'), server.BRIDGE_LEGACY_ID)
+        current = self.client.post('/api/bridge/pair', headers=pair_headers, json={'extensionId': server.BRIDGE_ID})
+        self.assertEqual(current.status_code, 200)
+        self.assertEqual(current.json().get('extensionId'), server.BRIDGE_ID)
+        bad_pair = self.client.post('/api/bridge/pair', headers=pair_headers, json={'extensionId': 'unknown'})
+        self.assertEqual(bad_pair.status_code, 400)
+        body = {'email': 'bridge-fixture@example.test',
+                'cookies': [{'name': 'fixture', 'value': 'fake', 'domain': 'flow.google.com',
+                             'path': '/', 'secure': True, 'hostOnly': True}]}
+        headers = {'Authorization': 'Bearer ' + current.json()['connectionToken'], **pair_headers}
+        for origin, expected in [('chrome-extension://' + 'a'*32, 403),
+                                 ('chrome-extension://' + server.BRIDGE_ID, 202)]:
+            response = self.client.post('/api/plugin/session', headers={**headers, 'Origin': origin}, json=body)
+            self.assertEqual(response.status_code, expected, response.text)
+
     def claim(self):
         return self.store.claim(set(), session_import_allowed=self.console.ready_session_imports(set(), None))
 

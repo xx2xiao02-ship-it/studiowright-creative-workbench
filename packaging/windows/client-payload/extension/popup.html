@@ -1,1 +1,24 @@
-<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>body{font:14px sans-serif;width:300px;padding:12px;color:#173f33}button{padding:10px}</style><h3>StudioWright 账号助手</h3><p id="swStatus">正在读取连接状态…</p><button id="swSync">手动同步当前账号</button><script src="studiowright-popup.js"></script></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>StudioWright 账号助手</title>
+  <style>
+    body { box-sizing: border-box; width: 325px; margin: 0; padding: 18px; background: #f3f6f2; color: #192e27; font: 14px/1.6 "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+    header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+    h1 { margin: 0; font-size: 17px; }
+    #swVersion { color: #51655c; font-size: 12px; }
+    button { width: 100%; min-height: 38px; border: 1px solid #225f49; border-radius: 8px; background: #225f49; color: #fff; font: inherit; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: default; }
+    button:focus-visible { outline: 2px solid #225f49; outline-offset: 3px; }
+    #swLast { padding: 9px 11px; border-radius: 8px; background: #fff; overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <header><h1>StudioWright 账号助手</h1><span id="swVersion"></span></header>
+  <p id="swStatus" role="status">正在检查本机连接…</p>
+  <button id="swSync" type="button" disabled>同步当前账号</button>
+  <p id="swLast" role="status" hidden></p>
+  <script src="studiowright-popup.js"></script>
+</body>
+</html>

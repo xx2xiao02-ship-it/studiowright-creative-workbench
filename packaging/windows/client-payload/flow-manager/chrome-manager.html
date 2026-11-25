@@ -189,19 +189,21 @@
           <button class="button primary" id="sync" type="button" disabled>同步所选账号</button>
           <div class="secondary-actions">
             <button class="button" id="open" type="button" disabled>打开 Flow 窗口</button>
-            <button class="button" id="install" type="button" disabled>安装 / 重载插件</button>
+            <button class="button" id="install" type="button" disabled>打开所选安装页</button>
+            <button class="button" id="check" type="button" disabled>检查所选插件连接</button>
           </div>
           <p id="status" role="status">同步完成后，在列表查看 Ubuntu 核对结果。</p>
         </section>
         <details class="panel help" id="plugin-help">
-          <summary>插件安装指引</summary>
+          <summary>插件安装向导</summary>
           <ol>
-            <li>勾选账号，点「安装 / 重载插件」，打开对应的扩展管理页。</li>
+            <li>勾选账号后打开所选安装页，也可一次打开全部需要安装的 Ubuntu 账号。</li>
             <li>首次安装时开启「开发者模式」，点「加载已解压的扩展程序」，选择下方文件夹。已安装时，找到对应插件并点「重新加载」。</li>
-            <li>在对应 Flow 窗口登录后，回到此页点「同步所选账号」。最终以「Ubuntu 登录核对成功」为准。</li>
+            <li>回来点击「检查所选插件连接」。确认插件能连接后，在对应 Flow 窗口登录，再发起同步。</li>
           </ol>
-          <input class="folder-path" id="folder" type="text" readonly aria-label="插件文件夹" placeholder="正在读取插件文件夹">
+          <input class="folder-path" id="folder" type="text" readonly aria-label="插件文件夹" placeholder="暂无可用插件文件夹">
           <button class="button" id="copy" type="button" disabled>复制插件路径</button>
+          <button class="text-button" id="install-missing" type="button" disabled>打开待安装账号的扩展页</button>
         </details>
       </aside>
     </div>
