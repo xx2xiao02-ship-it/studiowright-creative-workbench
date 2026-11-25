@@ -2420,17 +2420,19 @@ def make_handler(sources, deployment="local", coordinator=None, real_pool=None, 
                         return self.json_response(503, {"error": "现有账号池暂不可读取。"})
                     if self.path in {'/api/real-pool/image-analysis', '/api/real-pool/image-analysis-validate'}:
                         import gemini_image_input as vision
-                        if not {'account', 'prompt', 'attachments'} <= data.keys() or data.keys() - {'account', 'prompt', 'attachments', 'retry_policy', 'effort'}:
+                        if not {'account', 'prompt', 'attachments'} <= data.keys() or data.keys() - {'account', 'prompt', 'attachments', 'retry_policy', 'effort', 'fallback_model'}:
                             raise ValueError('识图需要账号、问题和图片回执。')
                         if data.get('retry_policy') not in (None, 'never'):
                             raise ValueError('Invalid retry policy')
-                        retry_kwargs={k:data[k] for k in ('retry_policy','effort') if k in data}
-                        from gemini_effort import resolve
+                        retry_kwargs={k:data[k] for k in ('retry_policy','effort','fallback_model') if k in data}
+                        from gemini_effort import resolve, resolve_flash_fallback
                         resolve(data.get('model'),data.get('effort'))
                         request_id = real_pool.conversation_id(self.headers.get('Idempotency-Key', ''))
                         account, prompt = data['account'], data['prompt']
                         if not isinstance(account, str):
                             raise ValueError('请选择账号或自动轮询。')
+                        if resolve_flash_fallback(data.get('fallback_model')) and account != 'auto':
+                            raise ValueError('Flash 保底仅用于自动选账号的新请求。')
                         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 20000:
                             raise ValueError('请输入 1 到 20000 字的问题。')
                         attachments = vision.normalized_attachments(data['attachments'])

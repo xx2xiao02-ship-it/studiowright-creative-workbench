@@ -71,7 +71,8 @@ class Effort(unittest.TestCase):
             quotas[a]={'status':'ok','checked_at':time.time(),'five_hour':{'remaining_percent':0}}
             self.assertEqual(send(NEON_FAMILY)[0]['account_key'],b)
             with self.assertRaises(DispatchBusy):
-                send(HYDROGEN_FAMILY+'-low')
+                official.generate('auto','test',str(uuid.uuid4()),items,
+                                  model=HYDROGEN_FAMILY+'-low',fallback_model=False)
             claimed=official.claim()
             self.assertEqual((claimed['request_id'],claimed['account_key'],claimed['model']), (rid,b,NEON_FAMILY+'-high'))
 
@@ -118,12 +119,18 @@ class Effort(unittest.TestCase):
             rid=str(uuid.uuid4())
             result,_=official.generate('auto','default',rid,items)
             self.assertEqual((result['model'],result['account_key']),(DEFAULT_TEXT_MODEL,hydrogen))
+            self.assertFalse(result['fallback']['used'])
             quotas[hydrogen]={'status':'ok','checked_at':time.time(),'weekly':{'remaining_percent':0}}
             self.assertFalse(official.generate('auto','default',rid,items)[1])
             with self.assertRaises(DispatchBusy):
-                official.generate('auto','quota depleted',str(uuid.uuid4()),items)
+                official.generate('auto','quota depleted',str(uuid.uuid4()),items,fallback_model=False)
+            fallback,_=official.generate('auto','use reserve model',str(uuid.uuid4()),items)
+            self.assertEqual((fallback['model'],fallback['requested_model']),(DEFAULT,DEFAULT_TEXT_MODEL))
+            self.assertTrue(fallback['fallback']['used'])
+            claimed=official.claim()
+            self.assertEqual((claimed['request_id'],claimed['model'],claimed['account_key']),(rid,DEFAULT,standard))
             flash,_=official.generate('auto','explicit flash',str(uuid.uuid4()),items,model=DEFAULT)
-            self.assertEqual(flash['model'],DEFAULT)
+            self.assertEqual((flash['model'],flash['requested_model']),(DEFAULT,DEFAULT_TEXT_MODEL))
 
     @unittest.skipUnless(os.name=='posix','Workbench account pool requires Linux')
     @patch('official_pool.reader_for')
@@ -132,10 +139,11 @@ class Effort(unittest.TestCase):
         reader_for.return_value.cached_accounts.return_value={}
         with fixture_directory() as directory, closing(RealPool(directory,directory)) as pool:
             official=pool.official
-            official.runtime=S(inventory=lambda:{key:True},text_models=lambda:{key:{DEFAULT_TEXT_MODEL}})
+            official.runtime=S(inventory=lambda:{key:True},text_models=lambda:{})
             items=[{'key':'flow-account-'+key}]
             rid=str(uuid.uuid4())
             result,_=official.generate('auto','legacy prompt',rid,items,model=DEFAULT)
+            official.runtime.text_models=lambda:{key:{DEFAULT_TEXT_MODEL}}
             replay,created=official.generate('auto','legacy prompt',rid,items)
             self.assertFalse(created)
             self.assertEqual(replay['model'],DEFAULT)
@@ -146,6 +154,22 @@ class Effort(unittest.TestCase):
                 db.execute('UPDATE conversations SET native_json=? WHERE id=?',(json.dumps(saved),conversation))
             follow_up,_=official.generate('auto','follow up',str(uuid.uuid4()),items,conversation_id=conversation)
             self.assertEqual((follow_up['model'],follow_up['account_key']),(DEFAULT,key))
+
+    @unittest.skipUnless(os.name=='posix','Workbench account pool requires Linux')
+    @patch('official_pool.reader_for')
+    def test_new_flash_alias_and_new_image_request_both_start_with_hydrogen(self,reader_for):
+        key='a'*64
+        reader_for.return_value.cached_accounts.return_value={}
+        with fixture_directory() as directory, closing(RealPool(directory,directory)) as pool:
+            official=pool.official
+            official.runtime=S(inventory=lambda:{key:True},text_models=lambda:{key:{DEFAULT_TEXT_MODEL}})
+            items=[{'key':'flow-account-'+key}]
+            text,_=official.generate('auto','legacy client',str(uuid.uuid4()),items,model=DEFAULT)
+            self.assertEqual((text['model'],text['fallback']['used']),(DEFAULT_TEXT_MODEL,False))
+            attachment={'index':0,'extension':'png','sha256':'f'*64}
+            with patch('official_pool.vision.files_for'):
+                image,_=official.generate('auto','identify image',str(uuid.uuid4()),items,[attachment],image_analysis=True)
+            self.assertEqual((image['model'],image['fallback']['used']),(DEFAULT_TEXT_MODEL,False))
 
     def test_capacity_retry_keeps_level(self):
         p=OfficialPool.__new__(OfficialPool);p.pool=S(state_dir=Path('/unused'))

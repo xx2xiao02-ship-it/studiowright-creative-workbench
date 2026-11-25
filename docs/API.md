@@ -61,19 +61,20 @@ def call(path, payload=None, request_id=None, *, file=None):
 
 ## Gemini · 对话与推理
 
-可选参数 `effort` 适用于文字对话和识图（含只校验接口）。使用 Gemini 3.8 Flash 时，支持 `low`（低）、`medium`（中）、`high`（高），分别使用对应后缀的模型 ID。省略、传 `null`、空字符串或无效值时使用 `medium`。每轮请求单独选择，自动重试沿用原请求等级。请求详情 `model` 回显实际选择。同一请求编号变更有效等级会产生参数冲突，新一轮应使用新编号。
+新文字对话和识图默认使用 `gemini-4-hydrogen-medium`。`effort` 可选择 `low`、`medium`、`high` 或 `xhigh`，实际可用档位取决于账号配置。`model` 可指定 HY 或 Neon 的型号，显式指定完整型号时，`effort` 须与型号一致。续聊省略 `model` 时沿用已保存的模型和账号，可调整同系列的思考等级。
 
-已开通 Hydrogen 中档的部署中，新建文字对话与 API 未传 `model` 时默认使用 `gemini-4-hydrogen-medium`。续聊未传 `model` 时沿用已保存的模型，仍可通过 `effort` 调整同系列的思考等级。显式传入 `model` 时使用指定型号。普通识图沿用它的独立模型设置。
-
-文字对话示例
+第一次发送时只需提供对话编号、`account: "auto"` 和消息。
 ```python
 chat = call("/api/conversations", {"title": "Hydrogen 对话示例"})
-print(call("/api/real-pool/chat", {
+rid = str(uuid4())
+submission = call("/api/real-pool/chat", {
     "conversation_id": chat["id"], "account": "auto",
-    "prompt": "请分析这个方案的优缺点。", "model": "gemini-4-hydrogen-medium"
-}, str(uuid4())))
+    "prompt": "请分析这个方案的优缺点。"
+}, rid)
+print(submission["request_id"], submission["model"], submission.get("fallback"))
+# 轮询 call(f"/api/real-pool/requests/{rid}") 查询最终型号和回复。
 ```
-识图时在原请求体加入 `"effort": "low"` 或 `"effort": "high"` 即可；上传方式保持不变。省略该字段使用中等。只校验接口也接受该字段，并按同样规则回退。
+识图沿用图片上传回执。识图接口和只校验接口都接受 `effort` 与 `fallback_model`。
 
 
 容量不足的受控重试：文字和识图业务仅在收到明确的容量不足 503 结束回执、且没有任何回复时，使用原账号和原请求编号，先等待 10 秒、再等待 30 秒，最多新增两次尝试。部分回复、结果未知、普通网络错误不触发此策略；`retry_policy: never` 禁止后台重试。每次重试前复查账号暂停、维护和请求状态；不换账号，不重放历史任务。验活和自动素材分析沿用原有规则。
@@ -92,34 +93,34 @@ Gemini CLI 账号池默认总并发 50，可在操作台 Gemini 卡下设置 1�
 
 **`POST /api/real-pool/chat`** · 传 conversation_id、account: "auto"、prompt，返回 request_id 和 status。
 
-### 高级模型与降级
+### 模型与 Flash 保底
 
-| `model` | 可选 `effort` | 默认 |
+| 模型 | 可选 `effort` | 用途 |
 | --- | --- | --- |
-| `gemini-4-neon` | `low`、`medium`、`high`、`xhigh` | `high` |
-| `gemini-4-hydrogen` | `low`、`medium`、`high`、`xhigh` | `high` |
-| `gemini-3.8-flash` | `low`、`medium`、`high` | `medium` |
+| `gemini-4-hydrogen` | `low`、`medium`、`high`、`xhigh` | 新请求主模型，参数全省略时使用 `medium` |
+| `gemini-4-neon` | `low`、`medium`、`high`、`xhigh` | 可显式选择的文字模型 |
+| `gemini-3.8-flash` | `low`、`medium`、`high` | 首轮保底及已绑定 Flash 的历史对话 |
 
-高级模型用于文字对话。也可传完整型号，如 `gemini-4-neon-xhigh`。若同时传 `effort`，两者必须一致，否则返回 HTTP 400。选择 `account: "auto"` 时，按账号页顺序优先选用第一个开通所选模型、授权就绪且无已知额度限制的账号。Flash 同样跳过已知额度用尽的账号。已登记账号数和当下可派发账号数会分别显示。
+使用 `account: "auto"` 时，按账号池顺序选择开通对应型号、授权就绪且额度可用的账号。旧客户端首轮显式传 Flash 型号时，工作台会先尝试同档 HY，再使用 Flash 保底。已绑定的对话沿用实际模型和账号。
 
-- 新对话首轮使用 `account: "auto"` 时，可传 `fallback_model`，明确允许降级。支持 `gemini-3.8-flash`（等同于 `gemini-3.8-flash-medium`）及 Flash 的三个完整档位。省略该字段时只使用请求的高级型号。Flash 的档位由 `fallback_model` 决定。
-- 入队或实际派发前若没有可用的高级账号，工作台用可用的 Flash 账号继续处理同一请求。入队前两个模型池都不可用会返回 HTTP 409。入队后仍无可用账号时，按原编号查询 `failed` 和 `reason`。
-- 对话首轮绑定实际使用的模型系列和账号。续聊沿用这两项，可以调整同系列的思考等级。已开始调用后的错误按既有重试规则处理；部分回复、结果未知需要查询原编号。需要换模型时新建对话。
-- 带降级选项的请求会返回 `requested_model`、实际 `model` 和 `fallback`。读取 `fallback.used` 判断是否降级，`fallback.model` 是设定的备选型号，`fallback.reason` 说明触发原因。提交后继续查同一 `request_id`，因为派发前仍可能降级。
+- 自动选账号的 HY 首轮在发送前没有可用主模型账号时，才使用 `gemini-3.8-flash-medium` 保底。`fallback_model: false` 可关闭保底，也可传受支持的 Flash 型号调整保底档位。显式选 Neon 时需传 `fallback_model` 才启用保底。
+- 入队前两个池都不可用时返回 HTTP 409。排队期间账号情况变化时，仍可以在第一次发送前更换账号或启用已设定的保底。已经开始调用、收到部分回复或结果待确认时，保留原模型、原账号和请求编号。
+- 查询回执里的 `requested_model` 查看主模型，`model` 查看实际模型，`fallback.used` 和 `fallback.reason` 查看是否保底及原因。续聊使用原对话编号，新消息采用新请求编号。
 
 ```python
-chat = call("/api/conversations", {"title": "高级模型与 Flash 降级"})
+chat = call("/api/conversations", {"title": "只用 HY"})
 rid = str(uuid4())
 print("请求编号:", rid, flush=True)
 submission = call("/api/real-pool/chat", {
     "conversation_id": chat["id"], "account": "auto",
     "prompt": "请列出这个方案的三个关键风险。",
-    "model": "gemini-4-neon", "effort": "xhigh",
-    "fallback_model": "gemini-3.8-flash-medium"
+    "fallback_model": False
 }, rid)
-print(submission["model"], submission["fallback"])
+print(submission["model"])
 # 后续用 call(f"/api/real-pool/requests/{rid}") 查询最终型号和回复。
 ```
+
+Google Antigravity 公告将于 2026 年 11 月 30 日移除 Gemini 3.8 Flash。Flash 保底受供应商实际可用性约束。[Google 模型说明](https://antigravity.google/docs/models?app=antigravity#reasoning-model)
 
 **账号与额度监控**可在工作台「操作台 → HY 默认池额度」查看。总览只统计已开通 Hydrogen 中档的账号，对每个窗口的近期已读剩余比例取平均。工作台本机面板端口 `18920` 的 `GET /api/channel-status` 返回默认文字模型 `dispatch.model` 与 `dispatch.advanced_pool`。`GET /api/official-quota` 返回各账号的 5 小时和每周剩余与恢复时间。`advanced_pool.quota_scope` 为 `gemini_models_shared`，表示这些数值来自各账号的官方 Gemini Models 共享额度。`advanced_pool.windows.*.total_remaining_percent` 是可读账号剩余百分比的合计，`average_remaining_percent` 是账号平均剩余。两个监控接口由面板提供，程序调用端口 `18922` 提供对话提交及结果查询。可读的高级账号每 5 分钟刷新。
 

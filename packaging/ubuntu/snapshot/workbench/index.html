@@ -393,24 +393,25 @@ def call(path, payload=None, request_id=None, *, file=None):
               <div class="api-heading"><h2 id="api-reasoning" tabindex="-1">Gemini · 对话与推理</h2></div>
               <div class="api-endpoint"><b class="api-method-post">POST</b><code>/api/conversations</code><span>传 title，返回对话 id。</span></div>
               <div class="api-endpoint"><b class="api-method-post">POST</b><code>/api/real-pool/chat</code><span>传 conversation_id、account: "auto"、prompt，返回 request_id 和 status。</span></div>
-              <p>文字对话可选择 <code>gemini-4-neon</code>、<code>gemini-4-hydrogen</code> 和 <code>gemini-3.8-flash</code>。Neon、Hydrogen 的 <code>effort</code> 支持 <code>low</code>、<code>medium</code>、<code>high</code>、<code>xhigh</code>，默认 <code>high</code>。Flash 支持前三档，默认 <code>medium</code>。也可直接传完整型号，如 <code>gemini-4-neon-xhigh</code>。</p>
-              <p>新文字对话与 API 默认使用 <code>gemini-4-hydrogen-medium</code>。自动派发只使用已开通该型号且当前可用的 CLI 账号。续聊沿用原账号和模型系列。</p>
-              <p>新对话首轮使用 <code>account: "auto"</code> 时，可加 <code>fallback_model</code>。只有高级池在发送前无可用账号时，才改用指定的 Flash 型号。查看返回的 <code>requested_model</code>、实际 <code>model</code> 和 <code>fallback.used</code>。两个池都不可用时，入队前返回 HTTP 409，入队后按原编号查询失败原因。</p>
-              <p>续聊沿用实际绑定的模型系列和账号，允许修改同系列的思考等级。部分回复或结果未知时按原请求编号查询。高级池可派发账号数和共享额度见「总览 → Gemini 各账号额度」。</p>
+              <p>新文字对话默认使用 <code>gemini-4-hydrogen-medium</code>。可以传 <code>effort</code> 调整思考等级，或显式选择 <code>gemini-4-neon</code>。旧调用传 <code>gemini-3.8-flash</code> 开新对话时，按 HY 优先处理。</p>
+              <p>自动选账号的 HY 首轮在发送前找不到可用主模型账号时，才用 3.8 Flash 保底。可传 <code>fallback_model: false</code> 关闭。结果里的 <code>requested_model</code>、<code>model</code> 和 <code>fallback.used</code> 分别显示主模型、实际模型和是否保底。</p>
+              <p>续聊沿用实际绑定的账号和模型系列。已开始调用后的错误按原模型规则处理，结果未知时查原请求编号。两个模型池都不可用时，提交前返回 HTTP 409。</p>
+              <p>Google 公告将于 2026 年 11 月 30 日移除 3.8 Flash。保底在官方仍提供该模型时可用。</p>
               <div class="api-code-head"><span>复制文字请求 · 实际发送</span><button type="button" data-copy-code="api-official-python">复制代码</button></div><pre class="api-code" tabindex="0"><code id="api-official-python">chat = call("/api/conversations", {"title": "我的对话"})
 rid = str(uuid4())
 print("请求编号:", rid, flush=True)
-print(call("/api/real-pool/chat", {
+queued = call("/api/real-pool/chat", {
     "conversation_id": chat["id"], "account": "auto", "prompt": "请用一句话介绍你自己。"
-}, rid))</code></pre>
-              <div class="api-code-head"><span>复制高级模型请求 · 允许降级到 Flash</span><button type="button" data-copy-code="api-advanced-python">复制代码</button></div><pre class="api-code" tabindex="0"><code id="api-advanced-python">chat = call("/api/conversations", {"title": "高级模型与 Flash 降级"})
+}, rid)
+print(queued["request_id"], queued["model"], queued.get("fallback"))
+# 轮询 call(f"/api/real-pool/requests/{rid}") 查询最终型号和回复。</code></pre>
+              <div class="api-code-head"><span>复制文字请求 · 只用 HY</span><button type="button" data-copy-code="api-advanced-python">复制代码</button></div><pre class="api-code" tabindex="0"><code id="api-advanced-python">chat = call("/api/conversations", {"title": "只用 HY"})
 rid = str(uuid4())
 print("请求编号:", rid, flush=True)
 print(call("/api/real-pool/chat", {
     "conversation_id": chat["id"], "account": "auto",
     "prompt": "请列出这个方案的三个关键风险。",
-    "model": "gemini-4-neon", "effort": "xhigh",
-    "fallback_model": "gemini-3.8-flash-medium"
+    "fallback_model": False
 }, rid))
 # 后续用 call(f"/api/real-pool/requests/{rid}") 查询最终型号和回复。</code></pre>
             </section>
@@ -418,6 +419,7 @@ print(call("/api/real-pool/chat", {
               <div class="api-heading"><h2 id="api-gemini-vision" tabindex="-1">Gemini · 上传图片并识别</h2></div>
               <div class="api-endpoint"><b class="api-method-post">POST</b><code>/api/real-pool/uploads/{请求编号}/{序号}/{扩展名}</code><span>传图片原始字节。序号从 0 开始；返回 index、extension、sha256。</span></div>
               <div class="api-endpoint"><b class="api-method-post">POST</b><code>/api/real-pool/image-analysis</code><span>传 account: "auto"、prompt、attachments（上传回执数组），请求头沿用上传路径中的编号。返回 request_id、status 和 conversation_id。</span></div>
+              <p>识图默认使用 HY 中档，自动选账号时沿用发送前的 Flash 保底规则。通过 <code>fallback_model: false</code> 限制为只用 HY。</p>
               <p>可传 1～4 张 JPG、PNG、WebP，单张最多 8 MiB、合计 16 MiB、单张不超过 2400 万像素。只校验时用 <code>POST /api/real-pool/image-analysis-validate</code>，参数相同，返回 <code>valid</code>、<code>submitted: false</code> 和 <code>image_count</code>。</p>
               <div class="api-code-head"><span>复制识图请求 · 默认只校验</span><button type="button" data-copy-code="api-code-gemini-vision">复制代码</button></div><pre class="api-code" tabindex="0"><code id="api-code-gemini-vision">files = [Path("产品.png"), Path("场景.jpg")]
 rid = str(uuid4())

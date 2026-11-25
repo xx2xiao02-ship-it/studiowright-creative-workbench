@@ -32,3 +32,11 @@ def text_model_options(advanced=()):
     return [{'id':model,'family':family,'label':label,'effort':effort}
             for family,label in families.items() for effort in THOUGHT_LEVELS
             if (model:=f'{family}-{effort}') in available]
+
+
+def resolve_flash_fallback(model):
+    if model is None or model is False:
+        return model
+    if model not in (FLASH_FAMILY,*MODELS.values()):
+        raise ValueError('fallback_model 必须为受支持的 Flash 型号，或设为 false 关闭保底。')
+    return resolve(model)

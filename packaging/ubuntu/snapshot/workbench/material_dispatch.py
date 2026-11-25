@@ -1,4 +1,4 @@
-"""One shared, durable material analysis lane. No generation or account fallback."""
+"""One shared, durable material analysis lane with a model chosen before dispatch."""
 import hashlib
 import json
 import tempfile
@@ -8,7 +8,7 @@ from pathlib import Path
 
 from material_backfill import has_labels
 from material_vision import analyze, read_media, PROMPT, SHOT_PROMPT, clean_shot_notes
-from official_pool import account_quota_restriction, busy_official
+from official_pool import busy_official, model_candidates, text_default_for
 from official_runtime import MODEL
 
 
@@ -54,6 +54,7 @@ def claim(pool, auto):
     available=official.runtime.inventory()
     if not any(available.values()):return None
     quota=official.account_quotas(available)
+    models=official.runtime.text_models()
     table='auto_material_jobs' if auto else 'material_backfill_jobs'
     with pool.connection() as db:
         db.execute('BEGIN IMMEDIATE')
@@ -82,21 +83,25 @@ def claim(pool, auto):
             # A material job only uses an idle eligible account; normal dialogue has priority.
             if db.execute("SELECT 1 FROM requests r JOIN official_jobs j USING(request_id) WHERE r.status='queued' LIMIT 1").fetchone():
                 return None
-            eligible=sorted(k for k in available if official.reason(db,k,available) is None
-                            and not busy_official(db,k) and not account_quota_restriction(MODEL,quota.get(k,{}),now))
-            if not eligible:return None
-            key=official.priority_order(eligible)[0]
+            eligible=sorted(k for k in available if official.reason(db,k,available) is None and not busy_official(db,k))
+            model=text_default_for(models)
+            candidates=model_candidates(eligible,model,models,quota,now)
+            if not candidates and model!=MODEL:
+                model=MODEL
+                candidates=model_candidates(eligible,model,models,quota,now)
+            if not candidates:return None
+            key=official.priority_order(candidates)[0]
             request_id=str(uuid.uuid4())
             db.execute("INSERT INTO requests(request_id,account_key,prompt_digest,status,created,note,selection) VALUES(?,?,?,'dispatching',?,?,?)",
                        (request_id,key,hashlib.sha256(((SHOT_PROMPT if shot else PROMPT)+ident).encode()).hexdigest(),now,'正在分析素材；固定账号，不会自动重试。','auto'))
             # Reuse the official pool's busy and unknown guards without creating a chat.
-            db.execute('INSERT INTO official_jobs(request_id,conversation_id,model,started,queue_wait_ms) VALUES(?,?,?,?,0)',(request_id,request_id,MODEL,now))
+            db.execute('INSERT INTO official_jobs(request_id,conversation_id,model,started,queue_wait_ms) VALUES(?,?,?,?,0)',(request_id,request_id,model,now))
             if shot:
                 db.execute("UPDATE material_shot_jobs SET status='running',request_id=?,note='Gemini 正在分析镜头。' WHERE asset_id=?",(request_id,ident))
             else:
                 db.execute("INSERT INTO material_analyses(request_id,asset_id,status,created) VALUES(?,?,'preparing',?)",(request_id,ident,now))
                 db.execute(f"UPDATE {table} SET status='running',request_id=?,updated=?,note='正在分析素材' WHERE asset_id=?",(request_id,now,ident))
-            return {'ident':ident,'request_id':request_id,'account':key,'table':table,
+            return {'ident':ident,'request_id':request_id,'account':key,'table':table,'model':model,
                     'imported':table == 'material_backfill_jobs' and candidate['scope'] == 'windows_import'}
         finally:
             if db.in_transaction:
@@ -182,7 +187,7 @@ def run_once(sources,pool,backfill=None):
                 parts=read_media(sources,ident,Path(directory),imported=imported)
                 if shot:
                     parts[0]={'type':'text','text':SHOT_PROMPT}
-                result=analyze(pool.official.runtime,job['account'],parts,receipt)
+                result=analyze(pool.official.runtime,job['account'],parts,receipt,model=job['model'])
     except Exception:
         result={'status':'unknown' if receipt.exists() else 'failed','reason':'material_preparation_or_call_failed'}
     finish(pool,sources,job,result,video)

@@ -3527,10 +3527,13 @@ function syncConversationControls(announce = false) {
   const modelSelect=$('chatModel'), effortSelect=$('chatEffort');
   const previousEffort=effortSelect.value;
   let choices=geminiChatModelChoices(select.value, accounts);
-  const hydrogenUnavailable = !!item && !item.account_key && state.channelStatus?.dispatch?.model === hydrogenMedium
-    && !choices.some(option => option.id === hydrogenMedium);
-  if (hydrogenUnavailable) choices = [...choices,
-    {id:hydrogenMedium, family:hydrogenModel, label:'Gemini 4 Hydrogen', effort:'medium'}];
+  const newHydrogenChat = !!item && !item.account_key && state.channelStatus?.dispatch?.model === hydrogenMedium;
+  const hydrogenUnavailable = newHydrogenChat && !choices.some(option => option.id === hydrogenMedium);
+  if (newHydrogenChat) {
+    choices = choices.filter(option => option.family !== flashModel);
+    if (hydrogenUnavailable) choices = [...choices,
+      {id:hydrogenMedium, family:hydrogenModel, label:'Gemini 4 Hydrogen', effort:'medium'}];
+  }
   if(item?.model && (archived || item.account_key)) {
     const saved=choices.find(option=>option.id===item.model);
     const [,family,effort]=item.model.match(/^(.*)-(low|medium|high|xhigh)$/) || [];
@@ -3552,8 +3555,8 @@ function syncConversationControls(announce = false) {
   modelSelect.disabled=locked || !!item?.account_key || families.size<2;
   effortSelect.disabled=locked || levels.length<2;
   const blockedByHydrogen = hydrogenUnavailable && modelSelect.value === hydrogenModel;
-  $('chatModelNote').textContent=imageAnalysis ? 'API 识图记录 · 每次识图独立提问。' : archived ? '历史归档只读；原问答与草稿保留，请新建官方对话。' : blockedByHydrogen ? '当前没有可派发的 HY 中档账号，请核对授权和额度，或手动选择其他模型。' : '首次发送后固定账号和模型。续聊时可调整思考等级。';
-  $('chatSend').disabled=!ready || !item || archived || pending || chatSending || !!item.hidden || blockedByHydrogen || !geminiSelectionReady(select.value);
+  $('chatModelNote').textContent=imageAnalysis ? 'API 识图记录 · 每次识图独立提问。' : archived ? '历史归档只读；原问答与草稿保留，请新建官方对话。' : blockedByHydrogen && select.value !== 'auto' ? '所选账号的 HY 中档当前不可用，请选择自动分配或核对授权和额度。' : newHydrogenChat && modelSelect.value === hydrogenModel && select.value === 'auto' ? '首轮优先用 HY，无可用账号时在发送前用 Flash 保底。续聊沿用实际模型和账号。' : '首次发送后固定账号和模型。续聊时可调整思考等级。';
+  $('chatSend').disabled=!ready || !item || archived || pending || chatSending || !!item.hidden || (blockedByHydrogen && select.value !== 'auto') || !geminiSelectionReady(select.value);
   if(announce && !chatSending) $('chatMessage').textContent=!item ? '请选择或新建对话。' : imageAnalysis ? (pending ? '正在处理识图请求，请等待结果。' : '继续传图请使用 API 文档里的 Gemini 识图接口。') : archived ? '历史记录保留；请新建对话使用官方通道。' : pending ? '任务正在排队或处理；可在原消息下查看处理和重试进度。' : !ready ? '官方调用暂不可用，草稿保留。' : '';
 }
 

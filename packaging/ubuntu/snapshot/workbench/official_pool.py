@@ -6,7 +6,8 @@ from official_runtime import (OfficialRuntime,MODEL,CHANNEL,TEMPORARY_LAUNCH_FAI
 from official_reauth import Reauthorization,SCHEMA as REAUTH_SCHEMA,private_bytes
 import gemini_image_input as vision
 from gemini_completion import saved_capacity_completion, RECOVERED
-from gemini_effort import ADVANCED_MODELS,DEFAULT_TEXT_MODEL,FLASH_FAMILY,HYDROGEN_FAMILY,MODELS,THOUGHT_LEVELS,resolve
+from gemini_effort import (ADVANCED_MODELS,DEFAULT_TEXT_MODEL,HYDROGEN_FAMILY,MODELS,THOUGHT_LEVELS,
+                           resolve,resolve_flash_fallback)
 from official_quota import quota_restriction,reader_for
 from dispatch_limit import DispatchBusy
 
@@ -397,31 +398,33 @@ class OfficialPool:
             if conversation_id:raise ValueError('识图请求是独立对话。')
             attachments=vision.normalized_attachments(attachments)
         elif attachments:raise ValueError('普通对话只收文字；请使用 Gemini 识图接口传图。')
-        default_text = model in (None, '') and not image_analysis and not readiness_probe
-        text_effort = effort if isinstance(effort,str) and effort in THOUGHT_LEVELS else None
+        default_model = model in (None, '') and not readiness_probe
+        requested_effort = effort if isinstance(effort,str) and effort in THOUGHT_LEVELS else None
+        fallback_model = resolve_flash_fallback(fallback_model)
+        fallback_disabled = fallback_model is False
         model=resolve(model,effort)
         if not isinstance(account,str):raise ValueError('请选择账号或按优先顺序分配。')
         if account!='auto':self.pool.allowed(account,items)
         advanced=model in ADVANCED_MODELS
-        if fallback_model is not None:
-            if account!='auto' or not (advanced or default_text) or image_analysis or readiness_probe or fallback_model not in (FLASH_FAMILY,*MODELS.values()):
-                raise ValueError('fallback_model 仅用于自动选账号的高级文字对话，必须指定受支持的 Flash 型号。')
-            fallback_model=resolve(fallback_model)
+        legacy_flash = not (default_model or advanced or image_analysis or readiness_probe)
+        if fallback_model and (account!='auto' or readiness_probe):
+            raise ValueError('Flash 保底仅用于自动选账号的新请求。')
         if advanced and (image_analysis or readiness_probe):
             raise ValueError('高级模型仅用于文字对话。')
-        models=self.runtime.text_models() if advanced or default_text else {}
+        models=self.runtime.text_models() if advanced or default_model or legacy_flash else {}
         if advanced and account!='auto' and model not in models.get(account,()):
             raise ValueError('所选账号未开通该模型和思考等级。')
         if conversation_id:self.pool.conversation_id(conversation_id)
         payload={'account':account,'prompt':prompt,'conversation_id':conversation_id,'model':model or MODEL}
-        if fallback_model:payload['fallback_model']=fallback_model
+        if fallback_disabled:payload['fallback_model']=False
+        elif fallback_model:payload['fallback_model']=fallback_model
         if retry_policy == 'never':payload['retry_policy']='never'
         if image_analysis:payload.update(channel=vision.CHANNEL,attachments=attachments)
         digest=hashlib.sha256(json.dumps(payload,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
         legacy_digest=digest
-        if default_text:
+        if default_model:
             # Bind replay to the request's intent, independent of current account readiness.
-            payload.update(model=None,effort=text_effort)
+            payload.update(model=None,effort=requested_effort)
             digest=hashlib.sha256(json.dumps(payload,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
         now=time.time();available=self.runtime.inventory()
         quota=self.account_quotas(available) if not readiness_probe else {}
@@ -447,10 +450,15 @@ class OfficialPool:
                 if db.execute("SELECT count(*) FROM requests r JOIN official_jobs j USING(request_id) WHERE r.status IN ('queued','dispatching')").fetchone()[0]>=100:raise Conflict('等待队列已满，消息未发送。')
                 conv=db.execute('SELECT * FROM conversations WHERE id=?',(conversation_id,)).fetchone() if conversation_id else None
                 if conversation_id and (not conv or conv['hidden']):raise Conflict('请选择一个未隐藏的对话。')
-                if default_text and not (conv and conv['account_key']) and text_default_for(models)==DEFAULT_TEXT_MODEL:
-                    model=resolve(HYDROGEN_FAMILY,text_effort or 'medium')
+                pinned=bool(conv and conv['account_key'])
+                if not pinned and (default_model or legacy_flash) and text_default_for(models)==DEFAULT_TEXT_MODEL:
+                    if legacy_flash:
+                        requested_effort=model.rsplit('-',1)[1]
+                    model=resolve(HYDROGEN_FAMILY,requested_effort or 'medium')
+                if not pinned and account=='auto' and not fallback_disabled and model.startswith(HYDROGEN_FAMILY+'-'):
+                    fallback_model=fallback_model or MODEL
                 native=None
-                if fallback_model and conv and conv['account_key']:
+                if fallback_model and pinned:
                     raise ValueError('fallback_model 仅用于新对话的首轮。')
                 if conv:
                     if conv['blocked']:raise Conflict('该对话已归档或有待核对的结果；请保留记录并新建对话。')
@@ -460,8 +468,9 @@ class OfficialPool:
                         if data.get('channel')!=CHANNEL:raise Conflict('旧通道对话保留为历史记录，请新建官方对话。')
                         previous_model=data.get('model')
                         if not isinstance(previous_model,str):previous_model=''
-                        if default_text and previous_model in (ADVANCED_MODELS | set(MODELS.values())):
-                            model=resolve(previous_model.rsplit('-',1)[0],text_effort) if text_effort else previous_model
+                        if (default_model and previous_model in (ADVANCED_MODELS | set(MODELS.values()))
+                                or legacy_flash and previous_model.startswith(HYDROGEN_FAMILY+'-')):
+                            model=resolve(previous_model.rsplit('-',1)[0],requested_effort) if requested_effort else previous_model
                         if (model in ADVANCED_MODELS or previous_model in ADVANCED_MODELS) and (
                             previous_model.rsplit('-',1)[0]!=model.rsplit('-',1)[0]):
                             raise ValueError('切换 Gemini 模型需要新建对话。')
@@ -472,7 +481,7 @@ class OfficialPool:
                     if db.execute("SELECT 1 FROM conversation_turns t JOIN requests r USING(request_id) WHERE t.conversation_id=? AND r.status IN ('queued','dispatching')",(conversation_id,)).fetchone():raise Conflict('该对话还有一轮正在等待或执行，请等待完成。')
                 advanced=model in ADVANCED_MODELS
                 if fallback_model and not advanced:
-                    raise ValueError('fallback_model 仅用于自动选账号的高级文字对话。')
+                    raise ValueError('当前主模型无法使用 Flash 保底。')
                 eligible=[k for k in permitted if self.reason(
                     db,k,available,self.readiness_block(db,k) if readiness_probe and k==account else None,
                     readiness_probe=readiness_probe and k==account) is None]
