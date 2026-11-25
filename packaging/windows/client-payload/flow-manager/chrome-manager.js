@@ -104,12 +104,16 @@ function renderAccounts() {
     const name = String(p.name || p.profile);
     const initial = Array.from(name.trim())[0]?.toUpperCase() || '·';
     const pluginCheck = p.last_plugin_check;
-    const ready = p.plugin === 'registered' && pluginCheck?.status === 'succeeded';
-    const [pluginLabel, pluginTone] = ready ? ['连接检查通过', 'success']
-      : ({registered:['已加载待核对', ''],missing:['未安装', 'warn'],
-          broken:['插件文件缺失', 'error'],disabled:['插件未启用', 'warn']}[p.plugin] || ['状态待核对', '']);
+    const [pluginLabel, pluginTone] = p.plugin === 'registered'
+      ? ({succeeded:['已安装 · 连接通过', 'success'], failed:['已安装 · 连接检查失败', 'warn'],
+          waiting:['已安装 · 正在检查连接', 'warn'], running:['已安装 · 正在检查连接', 'warn']}
+          [pluginCheck?.status] || ['已安装', 'success'])
+      : ({missing:['未安装', 'warn'], broken:['插件文件缺失', 'error'],
+          disabled:['已安装 · 未启用', 'warn']}[p.plugin] || ['状态待核对', '']);
     const [jobText, jobTone] = syncLabels[p.last_job?.status] || ['未发起', ''];
-    const pluginNote = p.plugin === 'registered' ? pluginCheck?.message : (p.plugin === 'missing' ? '' : p.plugin_note);
+    const pluginNote = p.plugin === 'registered'
+      ? pluginCheck?.message || (canCheck ? '连接尚未检查' : '')
+      : (p.plugin === 'missing' ? '' : p.plugin_note);
     return `<tr><td><label class="check-target">
       <input type="checkbox" data-profile="${esc(p.profile)}" aria-label="选择 ${esc(name)}（${esc(p.profile)}）">
     </label></td>
