@@ -148,7 +148,7 @@ class ImageCreditCompatibility(unittest.TestCase):
     def test_optional_credit_field_and_duplicate_submission(self):
         with fixture_directory() as directory:
             root = Path(directory)
-            pool = RealPool(root / 'state', root, execute=lambda *args: None)
+            pool = RealPool(root / 'state', root, browser_inventory=lambda: None)
             project = str(uuid.uuid4())
             snapshot = {
                 'projects': [{'key': 'project-key', 'source_profile': 'account-1', 'source_id': project}],
@@ -182,7 +182,7 @@ class ImageCreditCompatibility(unittest.TestCase):
     def test_explicit_single_attempt_is_forwarded_and_bound_to_the_request_id(self):
         with fixture_directory() as directory:
             root = Path(directory)
-            pool = RealPool(root / 'state', root, execute=lambda *args: None)
+            pool = RealPool(root / 'state', root, browser_inventory=lambda: None)
             project = str(uuid.uuid4())
             snapshot = {
                 'projects': [{'key': 'project-key', 'source_profile': 'account-1', 'source_id': project}],
@@ -217,7 +217,7 @@ class VideoAutoDispatchCompatibility(unittest.TestCase):
     def test_original_video_format_and_idempotency_without_provider(self):
         with fixture_directory() as directory:
             (directory / 'state').mkdir()
-            pool = RealPool(directory / 'state', directory, execute=lambda *args: None)
+            pool = RealPool(directory / 'state', directory, browser_inventory=lambda: None)
             project = str(uuid.uuid4())
             chosen = dict(key='project-key', source_profile='account-1', source_id=project)
             pool._auto_flow_project = lambda *args: chosen

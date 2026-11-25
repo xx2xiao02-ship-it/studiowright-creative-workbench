@@ -21,7 +21,7 @@ class GeminiAuthorizationTest(unittest.TestCase):
     def test_business_auth_block_is_recovered_by_independent_probe_without_resending(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            pool = RealPool(root, root, execute=lambda *_: None)
+            pool = RealPool(root, root, browser_inventory=lambda: None)
             try:
                 key = 'a' * 64
                 items = [{'key': 'flow-account-' + key}]

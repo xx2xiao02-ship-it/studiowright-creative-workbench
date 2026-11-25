@@ -33,7 +33,7 @@ class GeminiPoolRemovalTest(unittest.TestCase):
             original_config = runtime.config.read_bytes()
             items = [{'email': email, 'key': 'flow-account-' + key, 'flow_login': 'verified'}
                      for key, email in ((KEY, EMAIL), (other, other_email))]
-            pool = RealPool(root, root, execute=lambda *_: None)
+            pool = RealPool(root, root, browser_inventory=lambda: None)
             try:
                 official = pool.official
                 official.save_account_order([KEY, other])
@@ -101,7 +101,7 @@ class GeminiPoolRemovalTest(unittest.TestCase):
                         thread.join(timeout=3)
             finally:
                 pool.close()
-            restarted = RealPool(root, root, execute=lambda *_: None)
+            restarted = RealPool(root, root, browser_inventory=lambda: None)
             try:
                 self.assertEqual(restarted.removed_gemini_accounts(), {KEY})
                 self.assertEqual(restarted.official.runtime.inventory(), {other: True})

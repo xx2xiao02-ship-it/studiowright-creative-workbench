@@ -41,7 +41,6 @@ window.addEventListener('studiowright-connection', event => {
   if (event.detail?.connected === false) showConnectionState(false);
   else if (event.detail?.connected === true) { showConnectionState(true); void refresh({background:true}); }
 });
-let insightActivationPosting = false;
 let serviceActivationReadSequence = 0;
 let snapshotRefreshTimer = null;
 let lastTaskMarkup = null;
@@ -772,7 +771,7 @@ function followWorkbenchReleases() {
     notice.hidden = !pending;
     if (!pending || reloading || document.hidden || !document.hasFocus() ||
         !['overview','accounts','projects','records'].includes(state.view) || document.querySelector('dialog[open]') ||
-        insightActivationPosting || accountActionsInFlight.size || dispatchPolicyDirty ||
+        accountActionsInFlight.size || dispatchPolicyDirty ||
         ['flowPrompt', 'chatPrompt', 'geminiPrompt', 'apiKeyName', 'musicPrompt', 'musicTags', 'musicStyleId'].some(id => $(id)?.value) ||
         ['chatFiles', 'geminiFiles'].some(id => $(id)?.files?.length)) return;
     reloading = true;
@@ -1262,22 +1261,6 @@ $("hostShutdown")?.addEventListener("click", async () => {
   }, 6000);
 });
 
-function currentGeminiSummary(pool) {
-  if (pool?.available !== true || !Array.isArray(pool.items) ||
-      !pool.items.every(item => item && typeof item.gemini === 'string' && typeof item.gemini_auto_state === 'string')) return null;
-  const counts = {automatic: 0, refresh: 0, limited: 0, unresolved: 0, busy: 0, other: 0};
-  for (const item of pool.items) {
-    if (geminiAccountAvailability(item).auto) {
-      counts.automatic++;
-      if (item.gemini_auto_state === 'refresh_needed') counts.refresh++;
-    } else if (item.gemini_unresolved > 0) counts.unresolved++;
-    else if (item.gemini_busy || item.gemini_auto_state === 'busy') counts.busy++;
-    else if (item.gemini_check_reason === 'renewal_rate_limited' && item.gemini_auto_state === 'login_unconfirmed') counts.limited++;
-    else counts.other++;
-  }
-  return counts;
-}
-
 function flowGovernance(snapshot, fresh = state.snapshotFresh, verifiedEmpty = new Set(), probeStartedAt = 0, pageStates = {}) {
   const accounts=(snapshot?.real_accounts?.items || []).filter(account=>!account.flow_removed);
   const c=snapshot?.flow_coordination;
@@ -1506,7 +1489,6 @@ function renderAccountInsights(snapshot, target) {
   scope.querySelector('[data-dashboard-ring="MUSIC"]').style.setProperty('--fill',`${musicKnown && musicTotal ? musicReady/musicTotal*100 : 0}%`);
   scope.querySelector('[data-insight-accounts]').addEventListener('click',()=>setView('accounts'));
   scope.querySelector('[data-insight-conversations]').addEventListener('click',()=>setView('conversations'));
-  scope.querySelectorAll('[data-runtime-activate]').forEach(button=>button.addEventListener('click',()=>openGovernance(button.dataset.runtimeActivate)));
   scope.querySelectorAll('[data-governance]').forEach(button =>
     button.addEventListener('click', () => openGovernance(button.dataset.governance)));
   scope.querySelector('[data-music-readiness]')?.addEventListener('click', startMusicReadiness);
@@ -1522,13 +1504,10 @@ function renderAccountInsights(snapshot, target) {
 
 function renderServiceActivationFeedback(target = $('operationsDashboard')) {
   const records = state.serviceActivations || {};
-  const running = Object.values(records).some(record => record.status === 'running');
   for (const service of ['flow', 'gemini']) {
     const feedback = target.querySelector(`[data-activation-feedback="${service}"]`);
     if (!feedback) continue;
     const record = records[service];
-    const runtimeButton = target.querySelector(`[data-runtime-activate="${service}"]`);
-    if(runtimeButton) { runtimeButton.disabled=insightActivationPosting || running || !state.snapshot?.real_accounts?.available; runtimeButton.textContent=record?.status === 'running' ? '正在检查…' : '检查授权与额度'; }
     feedback.hidden = !record || record.status === 'idle';
     if (feedback.hidden) continue;
     const items = Array.isArray(record.items) ? record.items : [];
@@ -1546,42 +1525,17 @@ function renderServiceActivationFeedback(target = $('operationsDashboard')) {
 }
 
 async function refreshServiceActivations() {
-  if (insightActivationPosting) return;
   const sequence = ++serviceActivationReadSequence;
   await Promise.all(['flow', 'gemini'].map(async service => {
     try {
       const result = await getJson('/api/account-activation?service=' + service, {timeoutMs:8000});
-      if (sequence !== serviceActivationReadSequence || insightActivationPosting || result.service !== service || !Array.isArray(result.items)) return;
+      if (sequence !== serviceActivationReadSequence || result.service !== service || !Array.isArray(result.items)) return;
       const previous = state.serviceActivations[service];
       state.serviceActivations[service] = result;
       if (previous?.status === 'running' && result.status === 'finished') refresh();
     } catch (_) { /* Keep last known progress without resubmitting an operation. */ }
   }));
   renderServiceActivationFeedback();
-}
-
-async function startServiceActivation(service) {
-  if (insightActivationPosting || !['flow', 'gemini'].includes(service)) return;
-  if (Object.values(state.serviceActivations || {}).some(r=>r.status==='running')) return;
-  const runningPanel=$('dashboardRuntime').querySelector('[data-dashboard-running]');
-  if(runningPanel) runningPanel.open=true;
-  insightActivationPosting = true;
-  ++serviceActivationReadSequence;
-  state.serviceActivations[service] = {status:'running', items:[], error:'正在创建本轮账号检查…'};
-  renderServiceActivationFeedback();
-  try {
-    const response = await fetch('/api/account-activation', {method:'POST', credentials:'same-origin',
-      headers:{'Content-Type':'application/json','X-Workbench-Request':'1'}, body:JSON.stringify({service})});
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || '创建未完成');
-    if (result.service !== service || !Array.isArray(result.items)) throw new Error('检查结果格式未确认');
-    state.serviceActivations[service] = result;
-  } catch (error) {
-    state.serviceActivations[service] = {status:'unknown', items:[], error:(error.message || '提交状态未确认') + '；请核对本轮结果，不会自动重试。'};
-  } finally {
-    insightActivationPosting = false;
-    renderServiceActivationFeedback();
-  }
 }
 
 const governanceDialog = $('governanceDialog');

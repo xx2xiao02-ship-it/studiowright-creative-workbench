@@ -91,7 +91,7 @@ class ProjectNotStarted(Exception):
 
 
 class RealPool:
-    def __init__(self, state_dir, program_dir, execute=None, browser_inventory=None):
+    def __init__(self, state_dir, program_dir, browser_inventory=None):
         self.monitor_heartbeat = {'last_completed': None, 'last_error': None}
         self.state_dir = Path(state_dir)
         self.program_dir = Path(program_dir)
@@ -111,8 +111,7 @@ class RealPool:
                 os.close(self.lock_fd)
                 raise RuntimeError('已有工作台使用真实账号状态。') from None
         self.dispatch_limit = DispatchLimit(self.state_dir / 'dispatch')
-        self.execute = self.dispatch_limit.wrap(execute or self._execute)
-        self.browser_inventory = browser_inventory if browser_inventory is not None else (self._browser_inventory if execute is None else None)
+        self.browser_inventory = self._browser_inventory if browser_inventory is None else browser_inventory
         self.upload_lock = threading.Lock()
         self.flow_reference_locks = tuple(threading.Lock() for _ in range(32))
         with self.connection() as db:
@@ -594,9 +593,6 @@ class RealPool:
         except (OSError, subprocess.SubprocessError, ValueError, UnicodeError):
             return None
 
-    def _execute(self, operation, account, prompt=None, files=None, conversation=None):
-        return {'result':'legacy_transport_removed','submitted':False,'message':'已移除 Gemini 网页和 SDK 调用；当前仅保留官方 CLI 独立调用，工作台发送入口尚未接入。'}
-
     def get(self, request_id):
         with self.connection() as db:
             db.execute('BEGIN')
@@ -965,20 +961,6 @@ class RealPool:
                               (query, query, limit, (page - 1) * limit)).fetchall()
         return {'ids': [row['asset_id'] for row in rows], 'total': total, 'page': page, 'pages': max(1, (total + limit - 1)//limit)}
 
-    def begin_material_analysis(self, ident, request_id):
-        self.material_id(ident)
-        self.conversation_id(request_id)
-        with self.connection() as db:
-            db.execute('BEGIN IMMEDIATE')
-            if self.maintenance() or db.execute("SELECT 1 FROM material_analyses WHERE asset_id=? AND status IN ('preparing','saving','unknown')", (ident,)).fetchone():
-                db.execute('ROLLBACK')
-                raise Conflict('这项素材有未完成或结果未确认的分析。')
-            if db.execute('SELECT 1 FROM material_analyses WHERE request_id=?', (request_id,)).fetchone() or db.execute('SELECT 1 FROM requests WHERE request_id=?', (request_id,)).fetchone():
-                db.execute('ROLLBACK')
-                raise Conflict('该请求编号已经使用。')
-            db.execute("INSERT INTO material_analyses(request_id,asset_id,status,created) VALUES(?,?,'preparing',?)", (request_id, ident, time.time()))
-            db.execute('COMMIT')
-
     def finish_material_analysis(self, ident, request_id):
         from material_vision import clean_shot_notes
         self.material_id(ident)
@@ -1110,19 +1092,6 @@ class RealPool:
                 raise ValueError('附件传输校验失败。')
             result.append(path)
         return result
-
-    def clear_uploads(self, request_id, attachments):
-        directory = self.state_dir / 'uploads' / request_id
-        if directory.is_symlink() or not directory.is_dir():
-            return
-        for item in attachments:
-            path = directory / (str(item['index']) + '.' + item['extension'])
-            if path.is_file() and not path.is_symlink():
-                path.unlink()
-        try:
-            directory.rmdir()
-        except OSError:
-            pass
 
     def purge_stale_uploads(self):
         root = self.state_dir / 'uploads'

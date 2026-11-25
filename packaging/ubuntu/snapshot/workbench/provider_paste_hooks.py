@@ -1,11 +1,6 @@
-"""Staged adapters for the existing Flow and Gemini submit boundaries.
-
-Nothing in this file is installed into the running services. The desktop
-driver and exact account/window identity must be supplied by the caller.
-"""
+"""Submit Flow prompts using the caller's verified account and desktop window."""
 import asyncio
 import time
-import re
 from foreground_input import paste_and_submit, paste_and_submit_reserved
 
 
@@ -44,28 +39,6 @@ async def flow_submit(*, page, composer, submit_button, credits_warning,
         await page.mouse.up()
     kwargs = dict(driver=driver, page=page, composer=composer, target=target,
                   prompt=prompt, checkpoint=checkpoint, submit=submit, hybrid=True)
-    if reserved:
-        return await paste_and_submit_reserved(**kwargs)
-    return await paste_and_submit(queue=queue, **kwargs)
-
-
-async def gemini_submit(*, page, composer, target, prompt, queue, driver,
-                        checkpoint, reserved=False):
-    # Use the page's explicit send control and validate it before crossing the
-    # irreversible boundary. One click only; ambiguous outcomes stay unknown.
-    button = page.get_by_role('button', name=re.compile(r'^(?:发送|Send|Send message)$', re.I))
-    async def ready_and_checkpoint():
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            if await button.count() == 1 and await button.is_visible() and await button.is_enabled():
-                await checkpoint()
-                return
-            await asyncio.sleep(.05)
-        raise ValueError('gemini_send_unavailable')
-    async def submit():
-        await button.click(timeout=5000)
-    kwargs = dict(driver=driver, page=page, composer=composer, target=target,
-                  prompt=prompt, checkpoint=ready_and_checkpoint, submit=submit)
     if reserved:
         return await paste_and_submit_reserved(**kwargs)
     return await paste_and_submit(queue=queue, **kwargs)
