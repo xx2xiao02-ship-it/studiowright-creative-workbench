@@ -295,7 +295,8 @@ class RealAdapter:
                     return {"email": bundle["email"], "projects": projects, "message": message}
 
                 return await inject_verified(
-                    studio.session.context, page, bundle, READ_STATE, vault, finalize=finalize
+                    studio.session.context, page, bundle, READ_STATE, vault,
+                    finalize=finalize, check_warning=check_login_warning,
                 )
             state = None
             for _ in range(10):

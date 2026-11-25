@@ -133,9 +133,9 @@ class ImportRestored(ValueError):
     """The previous browser login was restored after an unsuccessful import."""
 
 
-async def inject_verified(context, page, bundle, read_state, vault, *, finalize):
+async def inject_verified(context, page, bundle, read_state, vault, *, finalize, check_warning=None):
     """A successful write is not authentication. Restore old cookies on failure."""
-    from login_readiness import read_when_ready
+    from login_readiness import read_when_ready, resume_google_session
 
     old = await context.cookies()
     backup = vault.put({"cookies": old})
@@ -144,27 +144,39 @@ async def inject_verified(context, page, bundle, read_state, vault, *, finalize)
     try:
         await context.clear_cookies()
         await context.add_cookies(bundle["cookies"])
-        failure = "Ubuntu 浏览器未能打开 Flow 页面"
-        await page.goto("https://flow.google.com/", wait_until="domcontentloaded", timeout=45000)
-        for _ in range(12):
-            failure = "无法读取 Flow 页面登录状态"
-            state = await read_when_ready(page, read_state)
-            emails = [str(e).lower() for e in state.get("emails", [])]
-            if state.get("signed_in"):
-                if emails == [bundle["email"]]:
-                    failure = "邮箱一致，但项目同步或窗口登记未完成"
-                    return await finalize(state)
-                if emails and bundle["email"] not in emails:
-                    failure = "Flow 返回的邮箱与目标账号不一致"
-                    break
-                failure = "Flow 未返回唯一的登录邮箱"
-            else:
-                host = urlsplit(page.url).hostname
-                failure = {
-                    "accounts.google.com": "Flow 跳到了 Google 登录页面，未能确认登录",
-                    "flow.google.com": "Flow 页面未确认登录状态",
-                }.get(host, "Flow 跳到了其他页面，未能核对登录状态")
-            await asyncio.sleep(1)
+        expected = bundle["email"]
+        for attempt in range(2):
+            failure = "Ubuntu 浏览器未能打开 Flow 页面"
+            await page.goto("https://flow.google.com/", wait_until="domcontentloaded", timeout=45000)
+            for _ in range(12):
+                failure = "无法读取 Flow 页面登录状态"
+                state = await read_when_ready(page, read_state)
+                emails = [str(e).lower() for e in state.get("emails", [])]
+                if state.get("signed_in"):
+                    if emails == [expected]:
+                        failure = "邮箱一致，但项目同步或窗口登记未完成"
+                        return await finalize(state)
+                    if emails and expected not in emails:
+                        failure = "Flow 返回的邮箱与目标账号不一致"
+                        break
+                    failure = "Flow 未返回唯一的登录邮箱"
+                else:
+                    host = urlsplit(page.url).hostname
+                    failure = {
+                        "accounts.google.com": "Flow 跳到了 Google 登录页面，未能确认登录",
+                        "flow.google.com": "Flow 页面未确认登录状态",
+                    }.get(host, "Flow 跳到了其他页面，未能核对登录状态")
+                await asyncio.sleep(1)
+            route = urlsplit(page.url)
+            if (attempt or state.get("signed_in") or route.scheme != 'https'
+                    or route.hostname not in {'flow.google.com', 'accounts.google.com'}):
+                break
+            if check_warning is not None:
+                await check_warning(page)
+            recovery = await resume_google_session(context, expected, read_state, check_warning=check_warning)
+            if recovery["status"] != "resumed":
+                failure = recovery["reason"]
+                break
         raise ValueError(failure)
     except (Exception, asyncio.CancelledError) as error:
         try:
