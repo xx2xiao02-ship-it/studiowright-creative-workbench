@@ -573,7 +573,6 @@ the PATH. `sw mcp` run in a terminal should wait silently for input.
 | `STUDIOWRIGHT_HOME` | data directory: profiles, job database, incidents | `%LOCALAPPDATA%\studiowright` on Windows |
 | `STUDIOWRIGHT_OUTPUT` | where files are saved | `Downloads/studiowright` |
 | `STUDIOWRIGHT_GAP_S`, `STUDIOWRIGHT_JITTER_S` | pacing between submits; overrides `sw pace set` | 20 s + 0-6 s |
-| `STUDIOWRIGHT_COOLDOWN_S` | pause after an unusual-activity refusal | 1800 s |
 | `STUDIOWRIGHT_UPSCALE_GAP_S`, `STUDIOWRIGHT_UPSCALE_JITTER_S` | spacing of upscaled downloads | 60 s + 0-20 s |
 | `STUDIOWRIGHT_UPSCALE_COOLDOWN_S` | pause of upscales after a refusal | 3600 s |
 | `STUDIOWRIGHT_IMAGE_TIMEOUT_S` | how long to wait for an image reply before looking in the project | 240 s |

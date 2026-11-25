@@ -18,6 +18,8 @@ from typing import Any
 
 from studiowright import paths
 
+GENERATION_COOLDOWN_SECONDS = 30 * 60
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY, profile TEXT NOT NULL, title TEXT, created REAL NOT NULL
@@ -65,6 +67,18 @@ class Store:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
             db.executescript(SCHEMA)
+            now = time.time()
+            db.execute(
+                """UPDATE pacing
+                   SET cooldown_until = flow_risk.last_unusual + :duration
+                   FROM flow_risk
+                   WHERE flow_risk.profile = pacing.profile
+                     AND instr(pacing.profile, ':') = 0
+                     AND flow_risk.last_unusual > 0 AND flow_risk.last_unusual <= :now
+                     AND pacing.cooldown_until > :now
+                     AND pacing.cooldown_until > flow_risk.last_unusual + :duration""",
+                {"duration": GENERATION_COOLDOWN_SECONDS, "now": now},
+            )
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:

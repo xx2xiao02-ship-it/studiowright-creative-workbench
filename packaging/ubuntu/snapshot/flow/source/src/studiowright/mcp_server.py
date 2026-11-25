@@ -413,8 +413,8 @@ async def flow_pace(
     """Show or save a profile's submit pacing; saved values persist for every later call.
 
     gap_s: seconds between two submits (default 20); jitter_s: random extra seconds;
-    cooldown_s: pause after an unusual-activity refusal. A profile that gets unusual-activity
-    refusals is safer with gap_s around 150. Environment variables still override.
+    cooldown_s: legacy setting. Flow generation uses a fixed 30-minute cooldown.
+    Environment variables still override the gap and jitter.
     """
     name = _profile(profile)
     store = Store()

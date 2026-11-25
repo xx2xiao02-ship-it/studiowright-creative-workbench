@@ -60,8 +60,10 @@ class RealAdapter:
         os.environ["STUDIOWRIGHT_OUTPUT"] = str(self.root / "output")
         os.environ["PATH"] = str(self.root / "bin") + os.pathsep + os.environ["PATH"]
         from studiowright.flow.options import ImageModel, VideoModel
+        from studiowright.store import Store
         from browser_rendering import RenderingStudio as Studio
 
+        Store()
         self.Studio = Studio
         self.models = {
             "image": [{"id": m.value, "label": m.label} for m in ImageModel],

@@ -1034,7 +1034,7 @@ def pace(ctx: click.Context) -> None:
 @pace.command("set")
 @click.option("--gap", type=float, help="Seconds between two submits.")
 @click.option("--jitter", type=float, help="Random extra seconds added to each gap.")
-@click.option("--cooldown", type=float, help="Pause in seconds after an unusual-activity refusal.")
+@click.option("--cooldown", type=float, help="Legacy setting. Flow generation uses a fixed 30-minute cooldown.")
 @click.option("--reset", is_flag=True, help="Forget the saved values (back to the defaults).")
 @click.pass_obj
 def pace_set(

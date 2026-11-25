@@ -14,7 +14,7 @@ import random
 import time
 from dataclasses import dataclass
 
-from studiowright.store import Store
+from studiowright.store import GENERATION_COOLDOWN_SECONDS, Store
 
 
 def env_seconds(name: str, default: float) -> float:
@@ -32,7 +32,7 @@ class PaceSettings:
     #: Random extra delay added to every gap, so submits are not evenly spaced.
     jitter_s: float = 6.0
     #: Pause after Flow reports unusual activity.
-    cooldown_s: float = 30 * 60
+    cooldown_s: float = GENERATION_COOLDOWN_SECONDS
 
     @classmethod
     def for_upscales(cls) -> PaceSettings:
@@ -48,9 +48,9 @@ class PaceSettings:
     def load(cls, store: Store, profile: str) -> PaceSettings:
         """The profile's saved pacing (``sw pace set``), with environment variables on top."""
         saved = saved_pace(store, profile)
-        cooldown = env_seconds("STUDIOWRIGHT_COOLDOWN_S", saved.get("cooldown_s", cls.cooldown_s))
-        if ':' not in profile:
-            cooldown = max(3600, cooldown)
+        cooldown = GENERATION_COOLDOWN_SECONDS
+        if ':' in profile:
+            cooldown = env_seconds("STUDIOWRIGHT_COOLDOWN_S", saved.get("cooldown_s", cls.cooldown_s))
         return cls(
             gap_s=env_seconds("STUDIOWRIGHT_GAP_S", saved.get("gap_s", cls.gap_s)),
             jitter_s=env_seconds("STUDIOWRIGHT_JITTER_S", saved.get("jitter_s", cls.jitter_s)),
@@ -147,13 +147,12 @@ class Governor:
     def report_unusual_activity(self, now: float | None = None) -> float:
         now = time.time() if now is None else now
         is_generation = ':' not in self.profile
-        base = (max(3600, self.settings.cooldown_s) if is_generation else self.settings.cooldown_s)
+        until = now + GENERATION_COOLDOWN_SECONDS
         with self.store.transaction() as db:
-            prior_row = db.execute("SELECT refusals FROM pacing WHERE profile = ?", (self.profile,)).fetchone()
-        prior_refusals = (prior_row[0] if prior_row else 0) or 0
-        # Escalating cooldown: repeat offenders sit out longer (1h → up to 4h).
-        until = now + base * (1 + min(prior_refusals, 3))
-        with self.store.transaction() as db:
+            if not is_generation:
+                row = db.execute("SELECT refusals FROM pacing WHERE profile = ?", (self.profile,)).fetchone()
+                prior_refusals = row["refusals"] if row else 0
+                until = now + self.settings.cooldown_s * (1 + min(prior_refusals, 3))
             db.execute(
                 "INSERT INTO pacing (profile, cooldown_until, refusals) VALUES (?, ?, 1) "
                 "ON CONFLICT (profile) DO UPDATE SET cooldown_until = MAX(cooldown_until, excluded.cooldown_until), "
@@ -166,7 +165,7 @@ class Governor:
                     "ON CONFLICT(profile) DO UPDATE SET consecutive=consecutive+1, "
                     "paused=CASE WHEN consecutive+1>=3 THEN 1 ELSE paused END, "
                     "paused_at=CASE WHEN consecutive+1>=3 AND paused=0 THEN excluded.last_unusual ELSE paused_at END, "
-                    "last_unusual=excluded.last_unusual", (self.profile, now),
+                    "last_unusual=MAX(COALESCE(last_unusual,0),excluded.last_unusual)", (self.profile, now),
                 )
                 db.execute("INSERT INTO flow_risk_events(profile,action,created) VALUES(?,'unusual',?)", (self.profile, now))
         # Governance: a cooling account goes fully silent. Close its managed
