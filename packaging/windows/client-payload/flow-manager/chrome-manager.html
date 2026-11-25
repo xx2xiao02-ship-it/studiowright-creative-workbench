@@ -63,7 +63,8 @@
     .primary { color: #fff; background: var(--accent); border-color: var(--accent); }
     .primary:not(:disabled):hover { background: var(--accent-hover); border-color: var(--accent-hover); }
     .secondary-actions { display: grid; gap: 8px; }
-    .select-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 20px 12px; color: var(--muted); font-size: 13px; }
+    .select-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 15px; padding: 0 20px 12px; color: var(--muted); font-size: 13px; }
+    .scope-toggle { display: inline-flex; align-items: center; gap: 7px; min-height: 28px; margin-left: auto; cursor: pointer; }
     .text-button { display: inline-flex; align-items: center; min-height: 28px; padding: 0 3px; border: 0; background: transparent; color: var(--accent); font-weight: 650; }
     .text-button:not(:disabled):hover { text-decoration: underline; }
     table { width: 100%; table-layout: fixed; border-collapse: separate; border-spacing: 0; font-size: 13px; }
@@ -168,6 +169,10 @@
         <div class="select-bar">
           <button id="all" class="text-button" type="button" disabled>全选</button>
           <button id="clear" class="text-button" type="button" hidden>清除已选</button>
+          <label id="scope-toggle" class="scope-toggle" hidden>
+            <input id="show-all-profiles" type="checkbox">
+            <span id="scope-toggle-label">显示其他本机用户</span>
+          </label>
         </div>
         <table aria-labelledby="list-title">
           <colgroup><col class="check-column"><col class="identity-column"><col class="plugin-column"><col></colgroup>

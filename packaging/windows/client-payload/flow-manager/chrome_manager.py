@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.client import HTTPConnection, HTTPException
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -19,6 +20,33 @@ JOBS = {}
 LOCK = threading.Lock()
 LAUNCH_LOCK = threading.Lock()
 LAST_LAUNCH = 0.0
+
+
+def ubuntu_profile_matches(local_profiles):
+    connection = HTTPConnection('127.0.0.1', 18920, timeout=6)
+    try:
+        connection.request('GET', '/api/snapshot', headers={'Accept':'application/json'})
+        response = connection.getresponse()
+        if response.status != 200:
+            return None
+        maximum = 8 * 1024 * 1024
+        body = response.read(maximum + 1)
+        if len(body) > maximum:
+            return None
+        snapshot = json.loads(body)
+        flow, pool = snapshot['flow_state'], snapshot['real_accounts']
+        if flow['available'] is not True or flow['simulated'] is not False or pool['available'] is not True:
+            return None
+        rows = pool['items']
+        if not isinstance(rows, list) or any(not isinstance(a.get('email'), str) or not a['email'].strip() for a in rows):
+            return None
+        emails = {account['email'].strip().casefold() for account in rows}
+        return [{'profile':p['profile'], 'email':p['email']} for p in local_profiles
+                if isinstance(p.get('email'), str) and p['email'].strip().casefold() in emails]
+    except (OSError, HTTPException, ValueError, KeyError, TypeError, AttributeError):
+        return None
+    finally:
+        connection.close()
 
 
 def profiles(root=USER_DATA):
@@ -105,6 +133,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.path=='/health': return self.reply({'application':'studiowright-chrome-manager'})
         if self.path=='/api/profiles':
             with LOCK: return self.reply({'profiles':profiles(), 'extension_folder':str(EXTENSION)})
+        if self.path=='/api/registered-profiles':
+            with LOCK:
+                local = profiles()
+            matches = ubuntu_profile_matches(local)
+            return self.reply({'available': matches is not None, 'profiles': matches if matches is not None else []})
         if self.path.startswith('/api/job/'):
             nonce=self.path.rsplit('/',1)[-1]
             with LOCK: job=JOBS.get(nonce)

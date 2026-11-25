@@ -21,9 +21,12 @@ const bridgeRestrictions = new Set([
 ]);
 let profiles = [];
 let visibleProfiles = [];
+let ubuntuProfiles = null;
+let rosterStatus = 'loading';
 let restriction = '';
 let busy = false;
 let activeRefresh = null;
+let rosterRefresh = null;
 let fingerprint = null;
 let loadError = '';
 
@@ -69,9 +72,22 @@ function renderSelection() {
 
 function renderAccounts() {
   const query = $('search').value.trim().toLowerCase();
-  visibleProfiles = profiles.filter(p => [p.name, p.email, p.profile].some(v => String(v || '').toLowerCase().includes(query)));
-  const summary = query ? `找到 ${visibleProfiles.length} 个，共 ${profiles.length} 个本机账号` : `${profiles.length} 个本机账号`;
-  $('list-state').textContent = loadError ? (profiles.length ? '名单刷新失败，正在显示上次结果' : '本机账号读取失败') : summary;
+  const registered = ubuntuProfiles ? profiles.filter(p => ubuntuProfiles.get(p.profile) === p.email) : [];
+  const unmatched = ubuntuProfiles ? profiles.length - registered.length : 0;
+  const restrictedList = ubuntuProfiles !== null && !$('show-all-profiles').checked;
+  const scoped = rosterStatus === 'loading' ? []
+    : restrictedList ? registered : profiles;
+  const allowed = new Set(scoped.map(p => p.profile));
+  for (const profile of selected) if (!allowed.has(profile)) selected.delete(profile);
+  $('scope-toggle').hidden = !unmatched;
+  $('scope-toggle-label').textContent = `显示其他 ${unmatched} 个本机用户`;
+  visibleProfiles = scoped.filter(p => [p.name, p.email, p.profile].some(v => String(v || '').toLowerCase().includes(query)));
+  const count = restrictedList ? `${scoped.length} 个已接入 Ubuntu 的账号` : `${scoped.length} 个本机账号`;
+  const summary = query ? `找到 ${visibleProfiles.length} 个 · ${count}` : count;
+  $('list-state').textContent = loadError ? (profiles.length ? '名单刷新失败，正在显示上次结果' : '本机账号读取失败')
+    : rosterStatus === 'loading' ? '正在核对 Ubuntu 账号…'
+    : rosterStatus === 'unavailable' ? 'Ubuntu 名单暂不可读，显示全部本机用户'
+    : rosterStatus === 'stale' ? `${summary} · 使用上次核对名单` : summary;
   const focusedProfile = document.activeElement?.dataset.profile;
   $('rows').innerHTML = visibleProfiles.map(p => {
     const name = String(p.name || p.profile);
@@ -92,7 +108,10 @@ function renderAccounts() {
     <td><span class="cell-label">同步结果</span><span class="pill ${jobTone}">${jobText}</span>
       ${p.last_job?.message ? `<small class="row-detail">${esc(p.last_job.message)}</small>` : ''}</td></tr>`;
   }).join('') || `<tr><td class="empty" colspan="4">${loadError ? '无法读取账号，请点「刷新」重试。'
-    : query ? '没有匹配的 Chrome 用户，请试试其他关键词。' : '未找到本机 Chrome 用户。'}</td></tr>`;
+    : rosterStatus === 'loading' ? '正在核对…'
+    : query ? '没有匹配的 Chrome 用户，请试试其他关键词。'
+    : restrictedList && unmatched ? '未找到已接入的本机账号，可勾选「显示其他本机用户」。'
+    : '未找到本机 Chrome 用户。'}</td></tr>`;
   renderSelection();
   if (focusedProfile && !busy) {
     [...$('rows').querySelectorAll('[data-profile]')].find(box => box.dataset.profile === focusedProfile)?.focus({preventScroll:true});
@@ -133,6 +152,26 @@ function refresh() {
   return activeRefresh;
 }
 
+function refreshUbuntuProfiles() {
+  rosterRefresh ||= (async () => {
+    try {
+      const result = await request('/api/registered-profiles');
+      if (result.available !== true || !Array.isArray(result.profiles)) throw new Error('Ubuntu 名单暂不可读。');
+      const next = new Map(result.profiles.map(p => [p.profile, p.email]));
+      if (rosterStatus === 'current' && next.size === ubuntuProfiles.size
+          && [...next].every(([profile, email]) => ubuntuProfiles.get(profile) === email)) return;
+      ubuntuProfiles = next;
+      rosterStatus = 'current';
+    } catch {
+      const status = ubuntuProfiles ? 'stale' : 'unavailable';
+      if (rosterStatus === status) return;
+      rosterStatus = status;
+    }
+    renderAccounts();
+  })().finally(() => { rosterRefresh = null; });
+  return rosterRefresh;
+}
+
 async function run(action) {
   if (busy || !selected.size || (action === 'sync' && restriction)) return;
   busy = true;
@@ -165,10 +204,11 @@ $('rows').addEventListener('change', event => {
   renderSelection();
 });
 $('search').addEventListener('input', () => { if (fingerprint !== null || loadError) renderAccounts(); });
+$('show-all-profiles').addEventListener('change', renderAccounts);
 $('refresh').onclick = async () => {
   $('refresh').disabled = true;
   try {
-    const success = await refresh();
+    const [success] = await Promise.all([refresh(), refreshUbuntuProfiles()]);
     if (!busy) showStatus(success ? '本机账号列表已刷新。' : loadError, success ? '' : 'error');
   } finally {
     $('refresh').disabled = false;
@@ -195,5 +235,6 @@ $('copy').onclick = async () => {
   }
 };
 
-void refresh();
+void Promise.all([refresh(), refreshUbuntuProfiles()]);
 setInterval(() => { void refresh(); }, 4000);
+setInterval(() => { void refreshUbuntuProfiles(); }, 60000);
