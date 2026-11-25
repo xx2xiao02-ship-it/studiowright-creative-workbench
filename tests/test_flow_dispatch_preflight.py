@@ -325,10 +325,14 @@ class ChromeComponentDispatch(unittest.TestCase):
         history = {'lastpingday': '13400000000000000'}
         records = dict(self.records, **{extra: history})
         self.write_prefs(self.profile, records)
+        self.assertEqual(dispatch_check(self.root, self.profile), (True, []))
         self.write_prefs(self.profile, {extra: history}, secure=True)
         self.assertEqual(dispatch_check(self.root, self.profile), (True, []))
 
         expected = (False, [f'extension_present:{extra}'])
+        self.write_prefs(self.profile, {extra: {'lastpingday': 'invalid'}}, secure=True)
+        self.assertEqual(dispatch_check(self.root, self.profile), expected)
+        self.write_prefs(self.profile, {extra: history}, secure=True)
         folder = self.default(self.profile) / 'Extensions' / extra
         folder.mkdir()
         self.assertEqual(dispatch_check(self.root, self.profile), expected)

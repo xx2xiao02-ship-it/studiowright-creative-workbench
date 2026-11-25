@@ -791,6 +791,8 @@ class _HidClient:
         module = Path(__file__).resolve()
         if module.is_symlink() or not module.is_file():
             raise HidUnavailable('desktop_hid_module_unavailable')
+        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _safe_runtime(self.root)
         with self._spawn_lock():
             current = self._read_status()
             pid = current.get('pid')

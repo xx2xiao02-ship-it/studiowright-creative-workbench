@@ -280,7 +280,7 @@ def new_install(home, keep_awake=False):
 
 def main():
     parser = argparse.ArgumentParser(description='创作工作台 Ubuntu 服务端安装')
-    parser.add_argument('--mode', choices=('reuse', 'new', 'inspect', 'system-deps'))
+    parser.add_argument('--mode', choices=('reuse', 'new', 'inspect', 'system-deps', 'input-setup', 'input-check'))
     parser.add_argument('--keep-awake-on-ac', action='store_true',
                         help='全新安装时关闭桌面空闲计时和接通电源时的自动休眠')
     parser.add_argument('--enable-discovery', action='store_true', help='为现有服务启用局域网发现')
@@ -305,6 +305,18 @@ def main():
             raise RuntimeError('系统依赖模式适用于 Ubuntu 24.04。')
         subprocess.run(['sudo', 'apt-get', 'update'], check=True)
         subprocess.run(['sudo', 'apt-get', 'install', *SYSTEM_PACKAGES], check=True)
+    elif args.mode in ('input-setup', 'input-check'):
+        if os.geteuid() == 0:
+            raise RuntimeError('请以运行工作台的普通桌面用户执行此模式。')
+        release = platform.freedesktop_os_release()
+        if release.get('ID') != 'ubuntu' or release.get('VERSION_ID') != '24.04':
+            raise RuntimeError('硬件输入安装和验证适用于 Ubuntu 24.04。')
+        if args.mode == 'input-setup':
+            subprocess.run(['sudo', 'bash', str(PACKAGE / 'hid-input/setup.sh')], check=True)
+            print('硬件输入规则已安装。重新登录 Ubuntu 桌面后运行 --mode input-check。')
+        else:
+            module = PACKAGE / 'snapshot/workbench/uinput_hid.py'
+            subprocess.run([sys.executable, '-B', str(PACKAGE / 'hid-input/verify.py'), str(module)], check=True)
     elif args.mode == 'inspect':
         print(json.dumps(status(), ensure_ascii=False))
     elif args.mode == 'reuse':

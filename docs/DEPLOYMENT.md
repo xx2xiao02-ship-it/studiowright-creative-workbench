@@ -44,7 +44,7 @@ Windows 的 Chrome 管理助手也使用本机 `18890`。桌面客户端负责�
 
 ```bash
 # 把下面的文件名换成本次下载或构建的实际包名
-installer=./StudioWright-Ubuntu-24.04-Setup-0.3.7.run
+installer=./StudioWright-Ubuntu-24.04-Setup-1.0.0.run
 sha256sum "$installer"
 bash "$installer" --mode inspect
 ```
@@ -66,7 +66,11 @@ bash "$installer" --mode system-deps
 bash "$installer" --mode new
 ```
 
-安装完成后退出 Ubuntu 桌面并重新登录。系统询问键鼠输入授权时，按桌面提示允许远程交互。随后在工作台核对 GNOME 窗口定位与任务输入状态。保留账号已有的输入方式。使用 HID 的主机由管理员根据设备和权限另行配置，干净安装按默认 GNOME 桌面流程验收。
+安装完成后退出 Ubuntu 桌面并重新登录。系统询问键鼠输入授权时，按桌面提示允许远程交互。随后在工作台核对 GNOME 窗口定位与任务输入状态。保留账号已有的输入方式。Ubuntu 24.04 支持以下硬件输入安装选项，新装或升级后均可从同一个安装包执行。
+
+1. 用运行工作台的桌面账号执行 `bash "$installer" --mode input-setup`，按提示输入管理员密码。安装只为当前桌面会话启用 `/dev/uinput`，保留已有工作台设置和数据。
+2. 退出并重新登录 Ubuntu 桌面，用同一账号执行 `bash "$installer" --mode input-check`。通过时会显示虚拟鼠标和键盘已创建、输入助手连接通过。验证不点击、不输入文字。
+3. 工作台默认优先使用已就绪的硬件输入。现有配置若固定使用 GNOME 门户，会继续使用原设置。需要切回门户时，在 `~/.config/creative-unified-workbench/input-backend.json` 中设定 `"pointer": "portal"` 和 `"keyboard": "portal"`。
 
 | 路径或服务 | 用途 |
 | --- | --- |

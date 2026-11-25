@@ -319,7 +319,9 @@ def _unexpected_extensions(default, settings, on_disk):
                 continue
             installed = ident in on_disk
             # Chrome can keep an update timestamp after the extension is gone.
-            if not installed and isinstance(entry, dict) and entry.keys() == {'lastpingday'}:
+            if (not installed and isinstance(entry, dict) and entry.keys() == {'lastpingday'}
+                    and isinstance(entry['lastpingday'], str)
+                    and re.fullmatch(r'[0-9]{1,20}', entry['lastpingday'])):
                 continue
             if not _allowed_chrome_component(default, ident, entry, installed):
                 unexpected.add(ident)

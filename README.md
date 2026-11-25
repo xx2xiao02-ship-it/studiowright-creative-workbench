@@ -2,7 +2,7 @@
 
 一个连接 Flow 创作服务、官方 Gemini 和音乐服务的算力中心，包含 Ubuntu 服务端和 Windows 桌面操作端。Windows 端使用独立窗口，支持系统托盘和局域网发现。
 
-当前源码版本：**v0.3.7**。见 [版本记录](CHANGELOG.md) 与 [API 接入说明](docs/API.md)。当前源码后的修复仍以 `main` 分支提交为准。
+当前源码版本：**v1.0.0**。见 [版本记录](CHANGELOG.md) 与 [API 接入说明](docs/API.md)。
 
 ## 安装使用
 
