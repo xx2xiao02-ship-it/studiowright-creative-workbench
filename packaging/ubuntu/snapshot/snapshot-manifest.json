@@ -184,7 +184,7 @@
   "workbench/project_actions.py": "26205022af5411d364d1d9cb0e4b8ca34b70438b8c5768fcda1d40bade352aa7",
   "workbench/project_name_cache.py": "8d881ba7c332df1a9969df27ff60ad1bad67392ba3ba824f25b9ab5a45abb56d",
   "workbench/provider_paste_hooks.py": "100a99b8be98d61491a62af0d971946569a9a3cc6e64771a4760e30eb261ef32",
-  "workbench/server.py": "84bb440e158f7aa91367f2596881f81c3c5e2386d8c0810245145be692e5e826",
+  "workbench/server.py": "05d6d63db819735e8ada9a7df7b406f065b31b5c9629db20618d125d7b9d9b93",
   "workbench/shared_session_controller.py": "d05a60862c8d0eb02fd920eaad189c3aa4a4f93c80abfc4b7deae5735fb69c01",
   "workbench/simulated_conversations.py": "5de688317438f9cc8c1d6827c7504008c70edc598775f5c2a677501ce1dde478",
   "workbench/style.css": "e3aef7de75be455baa2f5bbaaf1e5b6ebe3fa2bc7c16418e61b8e96e8cb7e413",

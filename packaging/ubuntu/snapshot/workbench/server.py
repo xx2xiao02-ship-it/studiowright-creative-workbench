@@ -8,6 +8,7 @@ import hashlib
 import http.client
 import http.cookiejar
 import json
+import logging
 import math
 import os
 import re
@@ -31,6 +32,7 @@ from music_recovery import DATABASE as MUSIC_DATABASE, MUSIC_HOME
 
 ROOT = Path(__file__).resolve().parent
 FLOW_READINESS_LOCK = threading.Lock()
+LOGGER = logging.getLogger(__name__)
 MAX_RESPONSE = 16 * 1024 * 1024
 APPLY_LIBRARY_TAGS = r'''
 import json,os,pathlib,re,sqlite3,subprocess,sys
@@ -699,28 +701,52 @@ class Sources:
         # Reuse the original console's local session in memory only.
         self.opener = build_opener(ProxyHandler({}), NoRedirect(), HTTPCookieProcessor(http.cookiejar.CookieJar()))
 
-    def read(self, service, path):
+    def read(self, service, path, *, retry_transient=False):
         if service == "gemini":
             return None, 'Gemini 使用官方 CLI 通道，由工作台直接调用；不探测独立后台。'
         if service not in self.PATHS or path not in self.PATHS[service]:
             raise ValueError("路径不在只读清单内")
         url = f"http://127.0.0.1:{self.ports[service]}{path}"
+        request = Request(url, method="GET", headers={"Accept": "application/json"})
+        started = time.monotonic()
+        value, message, failure = self._read_once(request, self.timeout)
+        if not retry_transient or failure is None:
+            return value, message
+
+        elapsed = time.monotonic() - started
+        if failure in {'timeout', 'connection', 'http_500', 'http_502', 'http_503', 'http_504'}:
+            LOGGER.warning('Flow account state read failed (%s, %.2fs); retrying once before submission.',
+                           failure, elapsed)
+            time.sleep(0.25)
+            started = time.monotonic()
+            value, message, failure = self._read_once(request, max(self.timeout, 6))
+            if failure is None:
+                return value, message
+            elapsed = time.monotonic() - started
+        LOGGER.warning('Flow account state unavailable before submission (%s, %.2fs).', failure, elapsed)
+        return value, message
+
+    def _read_once(self, request, timeout):
         try:
-            request = Request(url, method="GET", headers={"Accept": "application/json"})
-            with self.opener.open(request, timeout=self.timeout) as response:
+            with self.opener.open(request, timeout=timeout) as response:
                 body = response.read(MAX_RESPONSE + 1)
             if len(body) > MAX_RESPONSE:
-                return None, "原后台返回的数据过大，暂时无法读取。"
+                return None, "原后台返回的数据过大，暂时无法读取。", 'response_too_large'
             value = json.loads(body.decode("utf-8"))
             if not isinstance(value, dict):
-                return None, "原后台返回的数据格式不正确。"
-            return value, None
+                return None, "原后台返回的数据格式不正确。", 'invalid_response'
+            return value, None, None
         except HTTPError as exc:
-            if exc.code in (401, 403):
-                return None, "原后台需要登录或授权，请从原入口处理。"
-            return None, "原后台暂时无法读取，请稍后重试。"
-        except (URLError, TimeoutError, OSError, ValueError, UnicodeError):
-            return None, "连接暂不可用，请检查对应后台。"
+            with exc:
+                if exc.code in (401, 403):
+                    return None, "原后台需要登录或授权，请从原入口处理。", f'http_{exc.code}'
+                return None, "原后台暂时无法读取，请稍后重试。", f'http_{exc.code}'
+        except (OSError, http.client.HTTPException) as exc:
+            cause = exc.reason if isinstance(exc, URLError) else exc
+            failure = 'timeout' if isinstance(cause, TimeoutError) else 'connection'
+            return None, "连接暂不可用，请检查对应后台。", failure
+        except ValueError:
+            return None, "原后台返回的数据格式不正确。", 'invalid_response'
 
     def library(self, method, target, data=None, range_header=None):
         """Forward only documented library operations to the existing loopback service."""
@@ -1131,16 +1157,25 @@ class Sources:
                 'evidence':generation_evidence(state['tasks'],windows,now),
                 'review':{p:w['task_id'] for p,w in windows.items() if w.get('state')=='result_unknown' and w.get('task_id')}}
 
-    def snapshot(self):
-        state, state_error = self.read("flow", "/api/state")
-        facets, facets_error = self.read("flow", "/api/library/facets")
+    def snapshot(self, *, submission=False):
+        if submission:
+            state, state_error = self.read("flow", "/api/state", retry_transient=True)
+            # Submission uses account, project and task data. Library facets are only for display.
+            facets, facets_error = None, None
+        else:
+            state, state_error = self.read("flow", "/api/state")
+            facets, facets_error = self.read("flow", "/api/library/facets")
         if state is not None and (not isinstance(state.get("projects"), list) or not isinstance(state.get("tasks"), list)):
+            if submission:
+                LOGGER.warning('Flow account state returned invalid project or task data before submission.')
             state, state_error = None, "原后台项目或任务数据格式不正确。"
         projects = project_rows(state) if state is not None else []
         if state is not None:
             open_flow_project_names(state, projects)
         tasks = task_rows(state, projects) if state is not None else []
         accounts = account_rows(state) if state is not None else None
+        if submission and state is not None and accounts is None:
+            LOGGER.warning('Flow account state returned invalid account data before submission.')
         exit_info = flow9exit_info()
         if exit_info and accounts:
             for item in accounts:
@@ -2459,10 +2494,12 @@ def make_handler(sources, deployment="local", coordinator=None, real_pool=None, 
                         }.get(self.path)
                         if expected is None or data.pop('method') != expected:
                             return self.json_response(400, {'error': '请求操作与接口不匹配，未提交。'})
-                    snapshot = sources.snapshot()
+                    snapshot = sources.snapshot(submission=True)
                     account_data = snapshot.get("real_accounts", {})
                     if not account_data.get("available"):
                         return self.json_response(503, {"error": "现有账号池暂不可读取。"})
+                    if getattr(real_pool, 'maintenance', lambda: False)():
+                        return self.json_response(503, {"error": "工作台正在更新，请稍后操作。"})
                     if self.path in {'/api/real-pool/image-analysis', '/api/real-pool/image-analysis-validate'}:
                         import gemini_image_input as vision
                         if not {'account', 'prompt', 'attachments'} <= data.keys() or data.keys() - {'account', 'prompt', 'attachments', 'retry_policy', 'effort', 'fallback_model'}:
