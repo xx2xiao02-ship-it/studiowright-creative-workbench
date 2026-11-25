@@ -161,7 +161,7 @@
   "workbench/gemini_execution.py": "4b3fc73939be49161727e240bc6de490b9a3a96d7681e4e8271855cdc24c3924",
   "workbench/gemini_image_input.py": "d5f3c8138393a312817f5e618cf3c4e8dd02a83f3b297d6cde3c88987026ab80",
   "workbench/gemini_quota_verification.py": "cfdd44f11af1fde1f5a878d47409f705d597cb6b666ae72444c770a629998b68",
-  "workbench/index.html": "7ff2b1c665a9bd61ced35de463ac0727732191efc08f2c366a470c1f36547a63",
+  "workbench/index.html": "63e636e46fc56d7a845bab1e699368d5cb953a179a93a32c9f3f307da85a4054",
   "workbench/input_backend.py": "9dd728df7d64f2749dde7c23b5fcf3e0417278be8e7f2aba538624f9483f163f",
   "workbench/live_pool.py": "6096baef7b6eceef8e65394d7c5a3c7e82f66f54f5d7366c24d48c3f4d3dfe00",
   "workbench/material_backfill.py": "d0d7ac01c5af7c4344954f7b0513cc8b73c12e7f5cf8aef30b6dd1c565155c6d",

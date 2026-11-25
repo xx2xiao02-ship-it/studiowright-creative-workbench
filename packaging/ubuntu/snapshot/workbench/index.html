@@ -425,7 +425,17 @@ print(call("/api/real-pool/chat", {
 # 后续用 call(f"/api/real-pool/requests/{rid}") 查询最终型号和回复。</code></pre>
             </section>
             <section class="api-panel" aria-labelledby="api-model-guide">
-              <div class="api-heading"><h2 id="api-model-guide" tabindex="-1">Gemini · 模型使用推荐</h2><p>3.8 Flash 可以用来做新闻简报和批量整理，HY 负责长期日常用量。复杂编导和高返工成本的判断由 Neon 承担，Carbon 用于长材料和疑难事项复核。</p></div>
+              <div class="api-heading"><h2 id="api-model-guide" tabindex="-1">Gemini · 模型使用推荐</h2><p>固定格式的活先用低档，需要理解多份材料用 HY 中档，遇到导演取舍或高返工成本的判断用 Neon，疑难事项交给 Carbon 深入复核。</p></div>
+              <h3>按任务快速选</h3>
+              <div class="api-table-wrap"><table class="api-table">
+                <thead><tr><th scope="col">任务特征</th><th scope="col">先选</th><th scope="col">下一步</th></tr></thead>
+                <tbody>
+                  <tr><td>结果好抽查，输入已经齐全</td><td>3.8 Flash 低档或 HY 低档</td><td>CLI 上把 Flash 作为过渡。长期用 HY 低档，账号只开中档时用 HY 中档。另接 Google API 做大批量时，可小样验证 3.5 Flash-Lite 的 <code>minimal</code> 档。</td></tr>
+                  <tr><td>要综合多篇资料、图片细节或已有分镜</td><td>HY 中档</td><td>输入完整但仍漏关系、因果或约束时，用 HY 高档复核。</td></tr>
+                  <tr><td>要定方案，错了会重拍、重生成或影响发布</td><td>Neon 中档或高档</td><td>普通分镜、方案比较用中档。复杂场景调度、重要结论与终审用高档。</td></tr>
+                  <tr><td>多套方案都有漏洞，根因存疑，或要复核长材料</td><td>Carbon 中档或高档</td><td>明确核验项用中档。要追证据、找反例或检查多个边界条件时用高档。</td></tr>
+                </tbody>
+              </table></div>
               <h3>3.8 Flash · 哪些活可以交给它</h3>
               <div class="api-table-wrap"><table class="api-table">
                 <thead><tr><th scope="col">适合的场景</th><th scope="col">思考档位</th><th scope="col">实际怎么用</th></tr></thead>
@@ -450,6 +460,30 @@ print(call("/api/real-pool/chat", {
                 </tbody>
               </table></div>
               <p>文字 API 可直接传 <code>model: "gemini-4-hydrogen-low"</code> 等完整型号。识图与视频抽帧在识别接口传 <code>effort</code>。低、高、最高档取决于账号是否开通，低档不可选时用中档。需要限定只用 HY 时，首轮可传 <code>fallback_model: false</code>。</p>
+              <h3>Neon 和 Carbon 的档位怎么选</h3>
+              <div class="api-table-wrap"><table class="api-table">
+                <thead><tr><th scope="col">模型和档位</th><th scope="col">适合的场景</th><th scope="col">怎样验收</th></tr></thead>
+                <tbody>
+                  <tr><td>Neon 低档 <code>low</code></td><td>同一个 Neon 对话里压缩草稿、整理讨论和归并简单备选</td><td>沿用已定的创作要求，核对关键决定是否遗漏。新建此类任务可直接用 HY。</td></tr>
+                  <tr><td>Neon 中档 <code>medium</code></td><td>口播结构、普通分镜、多套方案的优劣比较</td><td>交付可选方案、取舍理由及关键约束，便于当场修改。</td></tr>
+                  <tr><td>Neon 高档 <code>high</code></td><td>多人走位、复杂镜头衔接、对外报告审稿和重要决策</td><td>给每处判断标明依据、受影响镜头或段落以及修改方法。</td></tr>
+                  <tr><td>Neon 最高档 <code>xhigh</code></td><td>高档复核后仍有关键冲突的少数镜头或方案</td><td>只重查难点和关联材料。需要反复查证或排除多个假设时可交给 Carbon。</td></tr>
+                  <tr><td>Carbon 低档 <code>low</code></td><td>按现成清单核对报告、分镜或修复方案</td><td>逐条标明通过、待确认及依据，适合沿用已有的 Carbon 对话。</td></tr>
+                  <tr><td>Carbon 中档 <code>medium</code></td><td>多步骤推理、比较多版方案、核对跨章节约束</td><td>给出结论、证据和未解决项。指定 Carbon 时省略档位用中档。</td></tr>
+                  <tr><td>Carbon 高档 <code>high</code></td><td>疑难根因、长材料交叉核验、昂贵镜头的疑点终审</td><td>列出反例、触发条件和可验证的复核步骤。只把关键疑点和相关材料送进去。</td></tr>
+                </tbody>
+              </table></div>
+              <h3>把选型用到日常流程</h3>
+              <div class="api-table-wrap"><table class="api-table">
+                <thead><tr><th scope="col">流程</th><th scope="col">模型怎么接力</th><th scope="col">交付时检查</th></tr></thead>
+                <tbody>
+                  <tr><td>每日新闻与公告</td><td>先用搜索工具取官方原文、报道和发布日期，再用 3.8 Flash 低档或 HY 低档整理。有矛盾的条目单独交给 HY 中档。</td><td>每项有原文链接和时间。发布时间与事件日期分开，无法确认的结论标明原因。</td></tr>
+                  <tr><td>TrendPilot 专家作品</td><td>HY 低档批量提取标题、观点和引用，HY 中档逐篇总结。跨作品归纳遇到证据冲突时，用 Neon 中档复核。</td><td>关键观点能定位到原文，区分作者观点、可复用做法和适用条件。</td></tr>
+                  <tr><td>素材入库与镜头检索</td><td>HY 低档批量打标签。小字、快动作或需要精确定位时，先裁图、加密取帧或截短片段，再用 HY 中档。</td><td>有素材编号、片段时间范围、识别依据和待确认项。涉及对白时补转写或带音轨的输入。</td></tr>
+                  <tr><td>短剧、漫剧与口播编导</td><td>把目标、时长、参考和人物约束交给 Neon 中档出分镜。复杂场景用 Neon 高档定走位与衔接。定稿后用 HY 中档批量写提示词，再走 Flow 和 Lyria。</td><td>逐镜核对叙事作用、起止动作、方向和时长。Neon 高档做生成前终审，疑点才交 Carbon 高档复核。</td></tr>
+                  <tr><td>算力中心开发与故障排查</td><td>HY 中档先整理日志、配置和发生条件。跨平台、疑难并发或多处改动用 Neon 高档定位，复杂疑点用 Carbon 高档复核。</td><td>定位到可验证的根因，记录修改和验证步骤。由 HY 执行已明确的修改与测试。</td></tr>
+                </tbody>
+              </table></div>
               <h3>资讯、文字与运维</h3>
               <div class="api-table-wrap"><table class="api-table">
                 <thead><tr><th scope="col">场景</th><th scope="col">建议模型与思考档</th><th scope="col">升档条件和使用要点</th></tr></thead>
@@ -490,9 +524,12 @@ print(call("/api/real-pool/chat", {
                   <tr><td>生图、生视频和配乐</td><td>Flow／Lyria，使用生成档位</td><td>草稿先用低成本档，入选镜头再加清晰度。选模型 ID 时读算力中心快照。</td></tr>
                 </tbody>
               </table></div>
+              <h3>遇到失败时怎么处理</h3>
+              <p>来源、关键帧、音轨或上下文缺失时，先补充输入。材料齐全后仍漏因果、关联或约束，再提高思考档位。</p>
+              <p>遇到账号未开通、额度耗尽或排队时，先查账号和派发状态。换更高档仍受同一账号的共享额度和账号权限约束。已发送、部分返回或结果未知时，按原请求编号查询。</p>
+              <p>对照测试时首轮传 <code>fallback_model: false</code>，用结果里的 <code>model</code> 确认实际型号。切换模型系列要用新对话，并把原始材料、已定约束和待查问题一起交接。</p>
               <h3>算力中心选型与计费</h3>
               <p>算力中心 API 可显式选择 HY、Neon 或 Carbon 的文字模型。实际档位取决于账号已开通的选项。可使用 <code>gemini-4-hydrogen-low</code>、<code>gemini-4-neon-high</code> 或 <code>gemini-4-carbon-high</code> 等完整模型 ID。同时传 <code>effort</code> 时须与型号一致。首轮省略模型和档位使用 HY 中档。没有已开通 HY 低档的账号时，可选择 HY 中档。切换模型系列要新建对话。</p>
-              <p>Carbon 可在「自定义对话」和文字 API 中选择。低档用于已有明确材料的快速复核，中档用于多步骤推理，高档用于长材料核验和反复失败的疑难任务。省略 Carbon 的档位时使用中档。3.5 Flash-Lite 可通过另接 Google Gemini API 使用。</p>
               <p>识图与视频抽帧使用同一个识别接口，支持 <code>effort</code> 和 <code>fallback_model</code>。需要准确跟随指定档位时，可关闭 Flash 保底。Neon 和 Carbon 的文字请求可传整理好的识别结果、镜头笔记或转写。现有识图接口不接收 <code>model</code>。新闻搜索先由外部工具获取原文，再交给算力中心整理。</p>
               <p>算力中心 CLI 使用账号的 Gemini Models 共享额度。下表是 Google Gemini 付费 API 标准价，单位为美元／百万 token，输出含思考用量。搜索调用、缓存和批处理另计。</p>
               <div class="api-table-wrap"><table class="api-table">
@@ -505,7 +542,11 @@ print(call("/api/real-pool/chat", {
                   <tr><td>Gemini 4 Carbon</td><td>$2.00</td><td>$10.00</td><td>到 2026 年 11 月 30 日，12 月 1 日起输入 $4.00、输出 $20.00。</td></tr>
                 </tbody>
               </table></div>
-              <p>处理一批新任务时，先挑同一组样本对测。按识别或交付通过率、耗时和人工返工量选择最低可接受档位。编导按分镜一次通过率及重生成的镜头数评估。</p>
+              <h3>怎么评估性价比</h3>
+              <p>用同一批带标准答案或人工验收标准的样本，固定输入、取帧方式和输出要求。先比较低档和中档，再把未通过的难例交给高档。记录实际模型、一次通过率、等待与处理耗时、返工时间。视频编导还要记重生成的镜头数。</p>
+              <p>算力中心按 CLI 实际消耗观察账号的 5 小时与每周共享额度，并记录完成量。测试期间若有其他任务并行或发生额度刷新，额度变化难以归到单一模型。</p>
+              <p>另接 Google 付费 API 时，输入与输出按用量计算，输出用量包含思考。假设 1,000 单，每单固定 10,000 输入 token 与 500 计费输出 token，HY 约 $18.75，Neon 约 $37.50，3.8 Flash 促销价约 $9.38，Carbon 促销价约 $25.00、之后约 $50.00。示例按标准档估算，搜索、缓存、批处理和实际思考用量会影响费用。</p>
+              <p>每条验收通过的成本等于首轮调用、后续复跑和人工返工的费用之和除以通过数量。定期抽查低档结果，有明显漏项时只升档复核相关任务。</p>
               <h3>指定 Neon 高档的文字请求</h3>
               <p>先准备包含导演方案与分镜的 <code>storyboard_text</code>，沿用上文的 Python 公共准备。</p>
               <div class="api-code-head"><span>Python · 指定 Neon 高档</span><button type="button" data-copy-code="api-code-neon-guide">复制代码</button></div><pre class="api-code" tabindex="0"><code id="api-code-neon-guide">chat = call("/api/conversations", {"title": "复杂场景编导终审"})
@@ -533,6 +574,7 @@ print(result["request_id"], result["model"])
                 <a href="https://aistudio.google.com/docs/choosing-a-model" target="_blank" rel="noopener noreferrer"><span><strong>Google 模型选型与思考档位</strong><small>不同模型的适用任务、档位和单价</small></span></a>
                 <a href="https://aistudio.google.com/docs/pricing" target="_blank" rel="noopener noreferrer"><span><strong>Google Gemini API 价格</strong><small>标准、批处理和搜索计费</small></span></a>
                 <a href="https://antigravity.google/docs/models?app=antigravity#reasoning-model" target="_blank" rel="noopener noreferrer"><span><strong>Antigravity 模型可用性</strong><small>CLI 套餐、档位和下线日期</small></span></a>
+                <a href="https://antigravity.google/docs/cli/commands/usage/" target="_blank" rel="noopener noreferrer"><span><strong>Antigravity CLI 额度说明</strong><small>5 小时和每周共享限额</small></span></a>
                 <a href="https://aistudio.google.com/docs/video-understanding" target="_blank" rel="noopener noreferrer"><span><strong>Google 视频理解</strong><small>原生视频、音轨与取帧选项</small></span></a>
               </div>
             </section>
