@@ -314,9 +314,15 @@ def _unexpected_extensions(default, settings, on_disk):
             raise ValueError('invalid secure extension settings')
     unexpected = on_disk.difference(settings, secure)
     for source in (settings, secure):
-        unexpected.update(ident for ident, entry in source.items()
-                          if EXTENSION_ID.fullmatch(ident)
-                          and not _allowed_chrome_component(default, ident, entry, ident in on_disk))
+        for ident, entry in source.items():
+            if not EXTENSION_ID.fullmatch(ident):
+                continue
+            installed = ident in on_disk
+            # Chrome can keep an update timestamp after the extension is gone.
+            if not installed and isinstance(entry, dict) and entry.keys() == {'lastpingday'}:
+                continue
+            if not _allowed_chrome_component(default, ident, entry, installed):
+                unexpected.add(ident)
     return unexpected
 
 

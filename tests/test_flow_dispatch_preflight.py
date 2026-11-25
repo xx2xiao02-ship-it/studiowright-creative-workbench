@@ -320,6 +320,27 @@ class ChromeComponentDispatch(unittest.TestCase):
         (self.default(self.profile) / 'Extensions' / extra).mkdir()
         self.assertEqual(dispatch_check(self.root, self.profile), denied)
 
+    def test_extension_ping_history_is_ignored_only_without_any_installation_evidence(self):
+        extra, manifest = self.manifest('extension-ping-history')
+        history = {'lastpingday': '13400000000000000'}
+        records = dict(self.records, **{extra: history})
+        self.write_prefs(self.profile, records)
+        self.write_prefs(self.profile, {extra: history}, secure=True)
+        self.assertEqual(dispatch_check(self.root, self.profile), (True, []))
+
+        expected = (False, [f'extension_present:{extra}'])
+        folder = self.default(self.profile) / 'Extensions' / extra
+        folder.mkdir()
+        self.assertEqual(dispatch_check(self.root, self.profile), expected)
+        folder.rmdir()
+
+        installed = dict(history, manifest=manifest, location=1)
+        self.write_prefs(self.profile, {extra: installed}, secure=True)
+        self.assertEqual(dispatch_check(self.root, self.profile), expected)
+        self.write_prefs(self.profile, {extra: history}, secure=True)
+        self.write_prefs(self.profile, dict(self.records, **{extra: installed}))
+        self.assertEqual(dispatch_check(self.root, self.profile), expected)
+
     def test_extra_chrome_components_require_their_approved_profile_and_installation(self):
         docs, dictation = 'account-f8d81e309793', 'ub-chrome-f8f5d94158'
         for profile, label in ((docs, 'docs_offline'), (dictation, 'dictation_connector')):
