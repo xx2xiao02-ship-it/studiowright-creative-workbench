@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace as S
 from unittest.mock import Mock,patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'packaging/ubuntu/snapshot/workbench'))
-from gemini_effort import resolve,DEFAULT,DEFAULT_TEXT_MODEL,NEON_FAMILY,HYDROGEN_FAMILY,THOUGHT_LEVELS,text_model_options
+from gemini_effort import resolve,DEFAULT,DEFAULT_TEXT_MODEL,NEON_FAMILY,HYDROGEN_FAMILY,CARBON_FAMILY,THOUGHT_LEVELS,text_model_options
 from official_runtime import OfficialRuntime
 from official_pool import OfficialPool
 from live_pool import RealPool
@@ -33,6 +33,48 @@ class Effort(unittest.TestCase):
         self.assertEqual([row['id'] for row in text_model_options(configured)],[
             'gemini-3.8-flash-low',DEFAULT,'gemini-3.8-flash-high',HYDROGEN_FAMILY+'-xhigh',
         ])
+
+    def test_carbon_accepts_three_levels_and_advertises_only_enabled_levels(self):
+        self.assertEqual(resolve(CARBON_FAMILY), CARBON_FAMILY+'-medium')
+        for effort in ('low','medium','high'):
+            model=CARBON_FAMILY+'-'+effort
+            self.assertEqual(resolve(CARBON_FAMILY,effort), model)
+            self.assertEqual(resolve(model), model)
+            self.assertEqual(resolve(model,effort), model)
+        for model,effort in ((CARBON_FAMILY,'xhigh'),(CARBON_FAMILY+'-xhigh',None),
+                             (CARBON_FAMILY+'-high','medium')):
+            with self.assertRaises(ValueError):
+                resolve(model,effort)
+        enabled=OfficialRuntime._text_models({'advanced_text_models':[CARBON_FAMILY+'-low',CARBON_FAMILY+'-xhigh']})
+        self.assertEqual(
+            [option for option in text_model_options(enabled) if option['family']==CARBON_FAMILY],
+            [{'id':CARBON_FAMILY+'-low','family':CARBON_FAMILY,'label':'Gemini 4 Carbon','effort':'low'}],
+        )
+
+    @unittest.skipUnless(os.name=='posix','Workbench account pool requires Linux')
+    @patch('official_pool.reader_for')
+    def test_carbon_auto_and_continuation_select_only_enrolled_accounts(self,reader_for):
+        standard, carbon=('a'*64,'b'*64)
+        models={standard:{DEFAULT_TEXT_MODEL},carbon:{CARBON_FAMILY+'-medium',CARBON_FAMILY+'-high'}}
+        reader_for.return_value.cached_accounts.return_value={}
+        with fixture_directory() as directory, closing(RealPool(directory,directory)) as pool:
+            official=pool.official
+            official.runtime=S(inventory=lambda:dict.fromkeys(models,True),text_models=lambda:models)
+            items=[{'key':'flow-account-'+key} for key in models]
+            with self.assertRaises(DispatchBusy):
+                official.generate('auto','unsupported level',str(uuid.uuid4()),items,model=CARBON_FAMILY,effort='low')
+            rid=str(uuid.uuid4())
+            result,_=official.generate('auto','new Carbon chat',rid,items,model=CARBON_FAMILY)
+            self.assertEqual((result['account_key'],result['model']),(carbon,CARBON_FAMILY+'-medium'))
+            self.assertNotIn('fallback',result)
+            conversation=result['conversation_id']
+            native={'channel':'official_antigravity_cli','model':result['model'],'official_conversation_id':str(uuid.uuid4())}
+            with pool.connection() as db:
+                db.execute("UPDATE requests SET status='completed' WHERE request_id=?",(rid,))
+                db.execute('UPDATE conversations SET native_json=? WHERE id=?',(json.dumps(native),conversation))
+            follow_up,_=official.generate('auto','follow-up',str(uuid.uuid4()),items,
+                                          conversation_id=conversation,effort='high')
+            self.assertEqual((follow_up['account_key'],follow_up['model']),(carbon,CARBON_FAMILY+'-high'))
 
     def test_advanced_models_require_explicit_supported_account_and_are_text_only(self):
         pool=OfficialPool.__new__(OfficialPool)

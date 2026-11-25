@@ -2388,7 +2388,7 @@ $("realAccountTable").addEventListener("dragend", () => {
 
 function accountAvatarMarkup(identity, modelOptions) {
   const advanced = Array.isArray(modelOptions) && modelOptions.some(option =>
-    option?.family === 'gemini-4-neon' || option?.family === 'gemini-4-hydrogen');
+    ['gemini-4-neon', 'gemini-4-hydrogen', 'gemini-4-carbon'].includes(option?.family));
   const initial = esc(String(identity).slice(0, 1).toUpperCase());
   const attributes = advanced ? 'role="img" aria-label="支持 Gemini 高级模型" title="支持 Gemini 高级模型"' : 'aria-hidden="true"';
   return `<div class="account-avatar${advanced ? ' is-gemini-advanced' : ''}" ${attributes}>${initial}</div>`;
@@ -3546,7 +3546,7 @@ function syncConversationControls(announce = false) {
   else if(choices.some(option=>option.id===hydrogenMedium)) modelSelect.value=hydrogenModel;
   const levels=choices.filter(option=>option.family===modelSelect.value);
   effortSelect.replaceChildren(...levels.map(option=>new Option(chatEffortLabels[option.effort] || '原设置',option.id)));
-  const defaultEffort=modelSelect.value===flashModel || modelSelect.value===hydrogenModel ? 'medium' : 'high';
+  const defaultEffort=modelSelect.value==='gemini-4-neon' ? 'high' : 'medium';
   effortSelect.value=levels.find(option=>option.id===previousEffort)?.id
     || levels.find(option=>option.id===item?.model)?.id
     || levels.find(option=>option.effort===defaultEffort)?.id

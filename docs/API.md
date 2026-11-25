@@ -61,7 +61,7 @@ def call(path, payload=None, request_id=None, *, file=None):
 
 ## Gemini · 对话与推理
 
-新文字对话和识图默认使用 `gemini-4-hydrogen-medium`。`effort` 可选择 `low`、`medium`、`high` 或 `xhigh`，实际可用档位取决于账号配置。`model` 可指定 HY 或 Neon 的型号，显式指定完整型号时，`effort` 须与型号一致。续聊省略 `model` 时沿用已保存的模型和账号，可调整同系列的思考等级。
+新文字对话和识图默认使用 `gemini-4-hydrogen-medium`。文字请求可通过 `model` 指定 HY、Neon 或 Carbon。实际可用档位取决于模型和账号。显式指定完整型号时，`effort` 须与型号一致。续聊省略 `model` 时沿用已保存的模型和账号，可调整同系列的思考等级。
 
 第一次发送时只需提供对话编号、`account: "auto"` 和消息。
 ```python
@@ -99,11 +99,12 @@ Gemini CLI 账号池默认总并发 50，可在操作台 Gemini 卡下设置 1�
 | --- | --- | --- |
 | `gemini-4-hydrogen` | `low`、`medium`、`high`、`xhigh` | 新请求主模型，参数全省略时使用 `medium` |
 | `gemini-4-neon` | `low`、`medium`、`high`、`xhigh` | 可显式选择的文字模型 |
+| `gemini-4-carbon` | `low`、`medium`、`high` | 可显式选择的文字模型，省略档位时用 `medium` |
 | `gemini-3.8-flash` | `low`、`medium`、`high` | 首轮保底及已绑定 Flash 的历史对话 |
 
 使用 `account: "auto"` 时，按账号池顺序选择开通对应型号、授权就绪且额度可用的账号。旧客户端首轮显式传 Flash 型号时，工作台会先尝试同档 HY，再使用 Flash 保底。已绑定的对话沿用实际模型和账号。
 
-- 自动选账号的 HY 首轮在发送前没有可用主模型账号时，才使用 `gemini-3.8-flash-medium` 保底。`fallback_model: false` 可关闭保底，也可传受支持的 Flash 型号调整保底档位。显式选 Neon 时需传 `fallback_model` 才启用保底。
+- 自动选账号的 HY 首轮在发送前没有可用主模型账号时，才使用 `gemini-3.8-flash-medium` 保底。`fallback_model: false` 可关闭保底，也可传受支持的 Flash 型号调整保底档位。显式选 Neon 或 Carbon 时需传受支持的 Flash 型号才启用保底。
 - 入队前两个池都不可用时返回 HTTP 409。排队期间账号情况变化时，仍可以在第一次发送前更换账号或启用已设定的保底。已经开始调用、收到部分回复或结果待确认时，保留原模型、原账号和请求编号。
 - 查询回执里的 `requested_model` 查看主模型，`model` 查看实际模型，`fallback.used` 和 `fallback.reason` 查看是否保底及原因。续聊使用原对话编号，新消息采用新请求编号。
 
@@ -153,7 +154,7 @@ print(call("/api/real-pool/chat", {
 | TrendPilot 专家作品逐篇总结 | HY 中档 | 输出原文依据、做法和适用条件。跨作品归纳且证据冲突时，用 Neon 中档复核。 |
 | 跨资料研究、决策与对外报告 | HY 中档 → Neon 中档 | HY 先整理来源和事实。Neon 复核推断、反例与风险，重要决策可升 Neon 高档。 |
 | 查日志、例行排障、改文档或小功能 | HY 中档 | 先定位出错环节并做最小改动。 |
-| 跨 Windows／Ubuntu 故障、重试、并发与架构 | Neon 高档 | 用 Neon 定位根因、评审方案，再用 HY 中档执行有边界的修改与测试。长时间深度核验可另走官方 CLI，用 Carbon 高档。 |
+| 跨 Windows／Ubuntu 故障、重试、并发与架构 | Neon 高档 → Carbon 高档 | 用 Neon 定位根因、评审方案。长时间深度核验用 Carbon 高档，再用 HY 中档执行明确的修改与测试。 |
 
 ### 图片、视频理解与素材库
 
@@ -177,18 +178,18 @@ print(call("/api/real-pool/chat", {
 | 动作戏、多镜头连续动作、首尾帧衔接 | Neon 高档 | 先锁动作起止、受力和连续性。方案定后由 HY 中档编写逐镜提示词。 |
 | 口播转分镜、模板或素材匹配、画面与声音配合 | Neon 中档 | 素材与情绪节奏打架时用 Neon 高档改关键镜头。 |
 | 逐镜提示词、素材清单、生成参数和批量变体 | HY 中档 | 复用已经定稿的人物、构图、时序和动作约束。 |
-| 生成前终审、成片审片、返工取舍 | Neon 高档 | 优先评审高返工成本镜头。需要反复查长材料和多套方案时，可试 Neon 最高档，或另走 CLI 用 Carbon 高档复核。 |
+| 生成前终审、成片审片、返工取舍 | Neon 高档 → Carbon 高档 | 优先评审高返工成本镜头。需要反复查长材料和多套方案时，交给 Carbon 高档或 Neon 最高档复核。 |
 | 生图、生视频和配乐 | Flow／Lyria，使用生成档位 | 草稿先用低成本档，入选镜头再加清晰度。选模型 ID 时读算力中心快照。 |
 
 ### 算力中心选型与计费
 
-算力中心 API 可显式选择 HY 或 Neon 的文字模型。实际档位取决于账号已开通的选项。优先用明确的完整模型 ID，例如 `gemini-4-hydrogen-low`、`gemini-4-hydrogen-medium` 或 `gemini-4-neon-high`。同时传 `effort` 时须与型号一致。首轮省略模型和档位使用 HY 中档。没有已开通 HY 低档的账号时，可选择 HY 中档。切换模型系列要新建对话。
+算力中心 API 可显式选择 HY、Neon 或 Carbon 的文字模型。实际档位取决于账号已开通的选项。可使用 `gemini-4-hydrogen-low`、`gemini-4-neon-high` 或 `gemini-4-carbon-high` 等完整模型 ID。同时传 `effort` 时须与型号一致。首轮省略模型和档位使用 HY 中档。没有已开通 HY 低档的账号时，可选择 HY 中档。切换模型系列要新建对话。
 
 3.8 Flash 低档适合过渡期的轻量任务。Antigravity 计划于 2026 年 11 月 30 日移除 3.8 Flash。算力中心新对话的旧 Flash 型号请求会优先走同档 HY，Flash 可用时承担发送前保底。单独选择 Flash 可在官方 CLI 仍提供该型号时操作。
 
-Carbon 是满足套餐条件的官方 CLI 模型，可选低、中、高档。建议用于长时间推理、深度核验或排查反复失败的问题。算力中心 API 目前接受 HY、Neon 和旧 Flash 型号，Carbon 与 3.5 Flash-Lite 不属于该入口。3.5 Flash-Lite 可通过另接 Google Gemini API 使用。
+Carbon 可在「自定义对话」和文字 API 中选择。低档用于已有明确材料的快速复核，中档用于多步骤推理，高档用于长材料核验和反复失败的疑难任务。省略 Carbon 的档位时使用中档。3.5 Flash-Lite 可通过另接 Google Gemini API 使用。
 
-识图与视频抽帧使用同一个识别接口，支持 `effort` 和 `fallback_model`。需要准确跟随指定档位时，可关闭 Flash 保底。显式选 Neon 的文字接口只收文字，可传整理好的识别结果、镜头笔记或转写；现有识图接口不接收 `model`。新闻搜索先由外部工具获取原文，再交给算力中心整理。
+识图与视频抽帧使用同一个识别接口，支持 `effort` 和 `fallback_model`。需要准确跟随指定档位时，可关闭 Flash 保底。Neon 和 Carbon 的文字请求可传整理好的识别结果、镜头笔记或转写。现有识图接口不接收 `model`。新闻搜索先由外部工具获取原文，再交给算力中心整理。
 
 算力中心 CLI 使用账号的 Gemini Models 共享额度。下表是 Google Gemini 付费 API 标准价，单位为美元／百万 token，输出含思考用量。搜索调用、缓存和批处理另计。
 
@@ -217,6 +218,21 @@ print(call("/api/real-pool/chat", {
     "fallback_model": False
 }, rid))
 # 将 storyboard_text 设为你的导演方案与分镜文本，按原请求编号查询结果。
+```
+
+### 指定 Carbon 的文字请求
+
+```python
+chat = call("/api/conversations", {"title": "Carbon 深度核验"})
+rid = str(uuid4())
+result = call("/api/real-pool/chat", {
+    "conversation_id": chat["id"], "account": "auto",
+    "prompt": "请按重要程度列出这份方案的三个核验项。",
+    "model": "gemini-4-carbon", "effort": "high",
+    "fallback_model": False
+}, rid)
+print(result["request_id"], result["model"])
+# effort 可改为 low 或 medium，后续用原请求编号查询最终结果。
 ```
 
 - 不同模型的适用任务、档位和单价。[Google 模型选型与思考档位](https://aistudio.google.com/docs/choosing-a-model)

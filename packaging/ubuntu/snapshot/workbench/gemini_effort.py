@@ -4,19 +4,27 @@ DEFAULT=MODELS['medium']
 FLASH_FAMILY='gemini-3.8-flash'
 NEON_FAMILY='gemini-4-neon'
 HYDROGEN_FAMILY='gemini-4-hydrogen'
+CARBON_FAMILY='gemini-4-carbon'
 DEFAULT_TEXT_MODEL=HYDROGEN_FAMILY+'-medium'
-THOUGHT_LEVELS=('low','medium','high','xhigh')
-ADVANCED_FAMILIES={NEON_FAMILY:'Gemini 4 Neon',HYDROGEN_FAMILY:'Gemini 4 Hydrogen'}
-ADVANCED_MODELS={f'{family}-{level}' for family in ADVANCED_FAMILIES for level in THOUGHT_LEVELS}
+STANDARD_LEVELS=('low','medium','high')
+THOUGHT_LEVELS=(*STANDARD_LEVELS,'xhigh')
+ADVANCED_FAMILIES={
+    NEON_FAMILY: ('Gemini 4 Neon', 'high', THOUGHT_LEVELS),
+    HYDROGEN_FAMILY: ('Gemini 4 Hydrogen', 'high', THOUGHT_LEVELS),
+    CARBON_FAMILY: ('Gemini 4 Carbon', 'medium', STANDARD_LEVELS),
+}
+ADVANCED_MODELS={f'{family}-{level}' for family, (_, _, levels) in ADVANCED_FAMILIES.items()
+                 for level in levels}
 
 
 def resolve(model=None,effort=None):
     if isinstance(model,str):
         if model in ADVANCED_FAMILIES or model in ADVANCED_MODELS:
-            family,level=(model,'high') if model in ADVANCED_FAMILIES else model.rsplit('-',1)
-            if effort is not None and (effort not in THOUGHT_LEVELS or (model in ADVANCED_MODELS and level!=effort)):
+            family,level=(model,None) if model in ADVANCED_FAMILIES else model.rsplit('-',1)
+            _, default, levels=ADVANCED_FAMILIES[family]
+            if effort is not None and (effort not in levels or (level is not None and level!=effort)):
                 raise ValueError('模型与思考等级不一致或超出可用范围。')
-            return f'{family}-{effort or level}'
+            return f'{family}-{effort or level or default}'
         if model == FLASH_FAMILY:
             model=DEFAULT
     if model not in (None,'',DEFAULT,*MODELS.values()):raise ValueError('请选择工作台支持的 Gemini 模型。')
@@ -27,10 +35,10 @@ def resolve(model=None,effort=None):
 
 
 def text_model_options(advanced=()):
-    families={FLASH_FAMILY:'Gemini 3.8 Flash',**ADVANCED_FAMILIES}
+    families={FLASH_FAMILY:('Gemini 3.8 Flash', 'medium', STANDARD_LEVELS), **ADVANCED_FAMILIES}
     available=set(MODELS.values()) | set(advanced)
     return [{'id':model,'family':family,'label':label,'effort':effort}
-            for family,label in families.items() for effort in THOUGHT_LEVELS
+            for family,(label,_,levels) in families.items() for effort in levels
             if (model:=f'{family}-{effort}') in available]
 
 

@@ -394,7 +394,7 @@ def call(path, payload=None, request_id=None, *, file=None):
               <div class="api-heading"><h2 id="api-reasoning" tabindex="-1">Gemini · 对话与推理</h2></div>
               <div class="api-endpoint"><b class="api-method-post">POST</b><code>/api/conversations</code><span>传 title，返回对话 id。</span></div>
               <div class="api-endpoint"><b class="api-method-post">POST</b><code>/api/real-pool/chat</code><span>传 conversation_id、account: "auto"、prompt，返回 request_id 和 status。</span></div>
-              <p>新文字对话默认使用 <code>gemini-4-hydrogen-medium</code>。可以传 <code>effort</code> 调整思考等级，或显式选择 <code>gemini-4-neon</code>。旧调用传 <code>gemini-3.8-flash</code> 开新对话时，按 HY 优先处理。</p>
+              <p>新文字对话默认使用 <code>gemini-4-hydrogen-medium</code>。可以传 <code>effort</code> 调整思考等级，也可通过 <code>model</code> 显式选择 <code>gemini-4-neon</code> 或 <code>gemini-4-carbon</code>。Carbon 支持 <code>low</code>、<code>medium</code>、<code>high</code>，省略档位时用中档。旧调用传 <code>gemini-3.8-flash</code> 开新对话时，按 HY 优先处理。</p>
               <p>自动选账号的 HY 首轮在发送前找不到可用主模型账号时，才用 3.8 Flash 保底。可传 <code>fallback_model: false</code> 关闭。结果里的 <code>requested_model</code>、<code>model</code> 和 <code>fallback.used</code> 分别显示主模型、实际模型和是否保底。</p>
               <p>续聊沿用实际绑定的账号和模型系列。已开始调用后的错误按原模型规则处理，结果未知时查原请求编号。两个模型池都不可用时，提交前返回 HTTP 409。</p>
               <p>Google 公告将于 2026 年 11 月 30 日移除 3.8 Flash。保底在官方仍提供该模型时可用。</p>
@@ -428,7 +428,7 @@ print(call("/api/real-pool/chat", {
                   <tr><td>TrendPilot 专家作品逐篇总结</td><td>HY 中档</td><td>输出原文依据、做法和适用条件。跨作品归纳且证据冲突时，用 Neon 中档复核。</td></tr>
                   <tr><td>跨资料研究、决策与对外报告</td><td>HY 中档 → Neon 中档</td><td>HY 先整理来源和事实。Neon 复核推断、反例与风险，重要决策可升 Neon 高档。</td></tr>
                   <tr><td>查日志、例行排障、改文档或小功能</td><td>HY 中档</td><td>先定位出错环节并做最小改动。</td></tr>
-                  <tr><td>跨 Windows／Ubuntu 故障、重试、并发与架构</td><td>Neon 高档</td><td>用 Neon 定位根因、评审方案，再用 HY 中档执行有边界的修改与测试。长时间深度核验可另走官方 CLI，用 Carbon 高档。</td></tr>
+                  <tr><td>跨 Windows／Ubuntu 故障、重试、并发与架构</td><td>Neon 高档 → Carbon 高档</td><td>用 Neon 定位根因、评审方案。长时间深度核验用 Carbon 高档，再用 HY 中档执行明确的修改与测试。</td></tr>
                 </tbody>
               </table></div>
               <h3>图片、视频理解与素材库</h3>
@@ -454,15 +454,15 @@ print(call("/api/real-pool/chat", {
                   <tr><td>动作戏、多镜头连续动作、首尾帧衔接</td><td>Neon 高档</td><td>先锁动作起止、受力和连续性。方案定后由 HY 中档编写逐镜提示词。</td></tr>
                   <tr><td>口播转分镜、模板或素材匹配、画面与声音配合</td><td>Neon 中档</td><td>素材与情绪节奏打架时用 Neon 高档改关键镜头。</td></tr>
                   <tr><td>逐镜提示词、素材清单、生成参数和批量变体</td><td>HY 中档</td><td>复用已经定稿的人物、构图、时序和动作约束。</td></tr>
-                  <tr><td>生成前终审、成片审片、返工取舍</td><td>Neon 高档</td><td>优先评审高返工成本镜头。需要反复查长材料和多套方案时，可试 Neon 最高档，或另走 CLI 用 Carbon 高档复核。</td></tr>
+                  <tr><td>生成前终审、成片审片、返工取舍</td><td>Neon 高档 → Carbon 高档</td><td>优先评审高返工成本镜头。需要反复查长材料和多套方案时，交给 Carbon 高档或 Neon 最高档复核。</td></tr>
                   <tr><td>生图、生视频和配乐</td><td>Flow／Lyria，使用生成档位</td><td>草稿先用低成本档，入选镜头再加清晰度。选模型 ID 时读算力中心快照。</td></tr>
                 </tbody>
               </table></div>
               <h3>算力中心选型与计费</h3>
-              <p>算力中心 API 可显式选择 HY 或 Neon 的文字模型。实际档位取决于账号已开通的选项。优先用明确的完整模型 ID，例如 <code>gemini-4-hydrogen-low</code>、<code>gemini-4-hydrogen-medium</code> 或 <code>gemini-4-neon-high</code>。同时传 <code>effort</code> 时须与型号一致。首轮省略模型和档位使用 HY 中档。没有已开通 HY 低档的账号时，可选择 HY 中档。切换模型系列要新建对话。</p>
+              <p>算力中心 API 可显式选择 HY、Neon 或 Carbon 的文字模型。实际档位取决于账号已开通的选项。可使用 <code>gemini-4-hydrogen-low</code>、<code>gemini-4-neon-high</code> 或 <code>gemini-4-carbon-high</code> 等完整模型 ID。同时传 <code>effort</code> 时须与型号一致。首轮省略模型和档位使用 HY 中档。没有已开通 HY 低档的账号时，可选择 HY 中档。切换模型系列要新建对话。</p>
               <p>3.8 Flash 低档适合过渡期的轻量任务。Antigravity 计划于 2026 年 11 月 30 日移除 3.8 Flash。算力中心新对话的旧 Flash 型号请求会优先走同档 HY，Flash 可用时承担发送前保底。单独选择 Flash 可在官方 CLI 仍提供该型号时操作。</p>
-              <p>Carbon 是满足套餐条件的官方 CLI 模型，可选低、中、高档。建议用于长时间推理、深度核验或排查反复失败的问题。算力中心 API 目前接受 HY、Neon 和旧 Flash 型号，Carbon 与 3.5 Flash-Lite 不属于该入口。3.5 Flash-Lite 可通过另接 Google Gemini API 使用。</p>
-              <p>识图与视频抽帧使用同一个识别接口，支持 <code>effort</code> 和 <code>fallback_model</code>。需要准确跟随指定档位时，可关闭 Flash 保底。显式选 Neon 的文字接口只收文字，可传整理好的识别结果、镜头笔记或转写；现有识图接口不接收 <code>model</code>。新闻搜索先由外部工具获取原文，再交给算力中心整理。</p>
+              <p>Carbon 可在「自定义对话」和文字 API 中选择。低档用于已有明确材料的快速复核，中档用于多步骤推理，高档用于长材料核验和反复失败的疑难任务。省略 Carbon 的档位时使用中档。3.5 Flash-Lite 可通过另接 Google Gemini API 使用。</p>
+              <p>识图与视频抽帧使用同一个识别接口，支持 <code>effort</code> 和 <code>fallback_model</code>。需要准确跟随指定档位时，可关闭 Flash 保底。Neon 和 Carbon 的文字请求可传整理好的识别结果、镜头笔记或转写。现有识图接口不接收 <code>model</code>。新闻搜索先由外部工具获取原文，再交给算力中心整理。</p>
               <p>算力中心 CLI 使用账号的 Gemini Models 共享额度。下表是 Google Gemini 付费 API 标准价，单位为美元／百万 token，输出含思考用量。搜索调用、缓存和批处理另计。</p>
               <div class="api-table-wrap"><table class="api-table">
                 <thead><tr><th scope="col">模型</th><th scope="col">输入</th><th scope="col">输出</th><th scope="col">应用与价格期限</th></tr></thead>
@@ -487,6 +487,17 @@ print(call("/api/real-pool/chat", {
     "fallback_model": False
 }, rid))
 # 将 storyboard_text 设为你的导演方案与分镜文本，按原请求编号查询结果。</code></pre>
+              <h3>指定 Carbon 的文字请求</h3>
+              <div class="api-code-head"><span>Python · 指定 Carbon 思考档位</span><button type="button" data-copy-code="api-code-carbon-guide">复制代码</button></div><pre class="api-code" tabindex="0"><code id="api-code-carbon-guide">chat = call("/api/conversations", {"title": "Carbon 深度核验"})
+rid = str(uuid4())
+result = call("/api/real-pool/chat", {
+    "conversation_id": chat["id"], "account": "auto",
+    "prompt": "请按重要程度列出这份方案的三个核验项。",
+    "model": "gemini-4-carbon", "effort": "high",
+    "fallback_model": False
+}, rid)
+print(result["request_id"], result["model"])
+# effort 可改为 low 或 medium，后续用原请求编号查询最终结果。</code></pre>
               <div class="api-links">
                 <a href="https://aistudio.google.com/docs/choosing-a-model" target="_blank" rel="noopener noreferrer"><span><strong>Google 模型选型与思考档位</strong><small>不同模型的适用任务、档位和单价</small></span></a>
                 <a href="https://aistudio.google.com/docs/pricing" target="_blank" rel="noopener noreferrer"><span><strong>Google Gemini API 价格</strong><small>标准、批处理和搜索计费</small></span></a>
