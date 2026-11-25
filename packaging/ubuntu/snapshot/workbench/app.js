@@ -2606,6 +2606,8 @@ function renderAccounts() {
       ? `<button class="button button-light" type="button" data-remove-gemini="${accountKey}" aria-label="从 Gemini 号池删除 ${esc(identity)}"${item.gemini_busy ? ' disabled title="该账号正在处理 Gemini 请求"' : ''}>删除 Gemini 账号</button>` : '';
     const activeFlowTask = ownFlow.some(task => ['queued','running'].includes(task.status)
       || task.retry?.state === 'pending_switch');
+    const remoteFlow = flow && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(item.profile || '')
+      ? `<a class="button button-light" href="http://127.0.0.1:18888/remote#profile=${encodeURIComponent(item.profile)}" target="_blank" rel="noopener noreferrer" aria-label="远程登录 ${esc(identity)}">远程登录</a>` : '';
     const removeFlow = flow && item.email
       ? `<button class="button button-light" type="button" data-remove-flow="${accountKey}" aria-label="从 Flow 号池移除 ${esc(identity)}"${activeFlowTask ? ' disabled title="该账号仍有进行中的生成任务"' : ''}>移除 Flow 账号</button>` : '';
     const flowNotice = flow ? flowAccountNoticeMarkup(flowReason, pageIncident || state.snapshot?.flow_warning_screenshots?.[item.profile]) : '';
@@ -2625,7 +2627,7 @@ function renderAccounts() {
       ${!flow && geminiRow?.checking ? `<p class="account-check-status">Gemini · ${esc(geminiRow.note || '正在检查云端响应')}</p>` : ''}
       ${diagnostics ? `<details class="account-alert" data-account-fold="alert-${accountKey}"><summary><strong>${needsAttention || flow && flowPaused ? '异常详情' : '状态说明'}</strong><span>${flow ? 'Flow' : 'Gemini'}</span></summary><div class="account-alert-body">${diagnostics}</div></details>` : ''}
       ${flow ? `<div class="account-card-footer"><details class="account-retry" data-account-fold="retry-${accountKey}"><summary>切号备用项目</summary><p class="subtle">切号重试将在此账号选定的项目生成，可能消耗积分。未指定时不会用此账号切号。</p><select aria-label="切号备用项目" data-retry-project="${accountKey}"><option value="">不指定</option>${accountProjects.map(p => `<option value="${esc(p.key)}" ${p.key === selectedRetryProject ? 'selected' : ''}>${esc(p.title)} · ${esc(shortId(p.source_id))}</option>`).join('')}</select><button class="text-link" type="button" data-save-retry-project="${accountKey}">保存备用项目</button></details>${removeFlow ? `<details class="account-preferences" data-account-fold="flow-actions-${accountKey}"><summary>账号操作</summary><div class="account-card-actions">${removeFlow}</div></details>` : ''}</div>` : removeGemini ? `<div class="account-card-footer"><details class="account-preferences" data-account-fold="actions-${accountKey}"><summary>账号操作</summary><div class="account-card-actions">${removeGemini}</div></details></div>` : ''}
-      <div class="account-card-actions">${flow ? govRelease : authControl+geminiVerify}${flow && flowPaused ? `<button class="button button-light" type="button" data-resume-flow="${accountKey}"${pageIncident ? ` data-incident="${esc(pageIncident.id)}"` : ''}>已核查，恢复 Flow</button>` : ''}</div></article>`;
+      <div class="account-card-actions">${flow ? remoteFlow+govRelease : authControl+geminiVerify}${flow && flowPaused ? `<button class="button button-light" type="button" data-resume-flow="${accountKey}"${pageIncident ? ` data-incident="${esc(pageIncident.id)}"` : ''}>已核查，恢复 Flow</button>` : ''}</div></article>`;
   }).join("")}</div>`;
   updateAccountUsageBars();
   updateAccountCooldowns();

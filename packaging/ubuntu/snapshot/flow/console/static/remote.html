@@ -1,1 +1,27 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>StudioWright · 远程账号登录</title><link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/remote.css"><script type="module" src="/static/remote.js"></script></head><body class="remote-page"><header class="remote-header"><div><a href="http://127.0.0.1:18920/#accounts">StudioWright</a><h1>远程账号登录</h1><p id="remoteHint">正在连接 Ubuntu 专用浏览器…</p></div><div><button class="primary" id="finishLogin">完成登录并检查</button><a class="secondary" href="http://127.0.0.1:18920/#accounts">返回账号管理</a></div></header><div class="remote-note">这是 Ubuntu 上该账号独立的浏览器。你可以在画面中输入账号、密码及验证码；后台不会记录输入内容。离开页面不会退出 Google，空闲 20 分钟会关闭远程窗口并保存资料。</div><p id="remoteState" role="status">正在连接…</p><main id="remoteScreen" aria-label="Ubuntu 远程浏览器"></main></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>算力中心 · Flow 远程登录</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/remote.css">
+  <script type="module" src="/static/remote.js"></script>
+</head>
+<body class="remote-page">
+  <header class="remote-header">
+    <div>
+      <h1>Flow 远程登录</h1>
+      <p id="remoteHint"></p>
+    </div>
+    <div>
+      <button type="button" class="primary" id="startLogin" hidden>打开 Ubuntu 登录窗口</button>
+      <button type="button" class="primary" id="finishLogin" hidden disabled>完成登录并检查</button>
+      <a class="secondary" href="http://127.0.0.1:18920/#accounts">返回账号管理</a>
+    </div>
+  </header>
+  <div class="remote-note">请在下方的 Ubuntu 浏览器完成 Google 登录。登录完成后，点击「完成登录并检查」。</div>
+  <p id="remoteState" role="status"></p>
+  <main id="remoteScreen" aria-label="Ubuntu 远程浏览器" hidden></main>
+</body>
+</html>

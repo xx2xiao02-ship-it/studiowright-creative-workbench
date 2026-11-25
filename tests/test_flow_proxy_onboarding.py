@@ -8,6 +8,7 @@ import sys
 from threading import Barrier
 import time
 import unittest
+from unittest.mock import patch
 
 from starlette.testclient import TestClient
 from test_flow_regressions import fixture_directory
@@ -111,6 +112,28 @@ class WindowsProxyOnboarding(unittest.TestCase):
         for old in ('app.js', 'account-insights.js', 'library-tools.js'):
             self.assertEqual(self.client.get('/static/' + old).status_code, 404)
         self.assertEqual(self.client.get('/static/api.html').status_code, 200)
+
+    def test_remote_login_landing_waits_for_same_origin_confirmation(self):
+        profile = 'fixture-flow-profile'
+        self.store.add_account(profile, 'Fixture Flow account')
+        session, _ = server.WebAuth(self.store).new_session(False)
+        self.client.cookies.set('sw_console_fixture', session)
+        route = '/api/accounts/' + profile + '/remote'
+        with patch.object(self.console.remote, 'start', return_value={'profile': profile}) as start:
+            landing = self.client.get('/remote')
+            self.assertEqual(landing.status_code, 200)
+            self.assertIn('id="startLogin" hidden', landing.text)
+            start.assert_not_called()
+            foreign = self.client.post(route, json={}, headers={
+                'Origin': 'https://example.test', 'X-Console-Request': '1',
+            })
+            self.assertEqual(foreign.status_code, 403)
+            start.assert_not_called()
+            confirmed = self.client.post(route, json={}, headers={
+                'Origin': 'http://testserver', 'X-Console-Request': '1',
+            })
+            self.assertEqual(confirmed.status_code, 200)
+            start.assert_called_once_with(profile)
 
     def test_same_cached_import_waits_then_verifies_with_a_unique_exit(self):
         email = 'new-account@example.test'
