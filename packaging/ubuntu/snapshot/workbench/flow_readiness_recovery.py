@@ -613,7 +613,10 @@ async def repair(account, initial, actions, safe_only=False):
     account = dict(account,projects=projects)
     verdict = 'unconfirmed'
     checked_overlay = 'dismiss_update' in actions
-    for _ in range(12 if actions else 1):
+    probes = 12 if actions else 1
+    if account.get('project_prepared') and 'open_project' in actions:
+        probes = 32
+    for _ in range(probes):
         if actions:
             await asyncio.sleep(.35)
         try:

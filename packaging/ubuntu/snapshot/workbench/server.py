@@ -1035,6 +1035,7 @@ class Sources:
                             continue
                         try:
                             account['projects'] = [prepare_project(account)]
+                            account['project_prepared'] = True
                             repairs[profile] = {'actions': ['prepare_project']}
                         except Conflict as exc:
                             repairs[profile] = {'actions': [], 'note': str(exc)}

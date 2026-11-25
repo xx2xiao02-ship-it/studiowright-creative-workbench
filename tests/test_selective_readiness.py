@@ -135,6 +135,7 @@ class SelectiveReadiness(unittest.TestCase):
         binding_input = json.loads(run.call_args_list[1].kwargs['input'])
         self.assertEqual([(account['profile'], account['projects']) for account in binding_input['accounts']],
                          [('new', [project_id])])
+        self.assertTrue(binding_input['accounts'][0]['project_prepared'])
         self.assertEqual(result['accounts'], {'new': 'ok'})
         self.assertEqual(result['repairs']['new']['actions'], ['prepare_project', 'rebind'])
 
