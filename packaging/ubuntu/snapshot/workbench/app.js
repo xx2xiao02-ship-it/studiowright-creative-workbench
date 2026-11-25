@@ -513,16 +513,25 @@ function syncQuickGeminiControls() {
 
 const workViews = new Set(["tasks", "conversations", "music"]);
 let lastWorkView = "tasks";
+const apiChapterButtons = Array.from(document.querySelectorAll('[data-api-target]'));
+
+function markApiChapter(id) {
+  for (const button of apiChapterButtons) {
+    if (button.dataset.apiTarget === id) button.setAttribute('aria-current', 'location');
+    else button.removeAttribute('aria-current');
+  }
+}
 
 function focusApiSection(id) {
   const target = $(id);
   if (!target) return;
+  markApiChapter(id);
   target.scrollIntoView({block: 'start'});
   target.focus({preventScroll: true});
 }
 
 function setView(view) {
-  const apiTarget = view === 'api-music' ? view : null;
+  const apiTarget = apiChapterButtons.some(button => button.dataset.apiTarget === view) ? view : null;
   if (apiTarget) view = 'api';
   if (view === "work") view = lastWorkView;
   if (!["overview", "accounts", "projects", "tasks", "records", "music", "conversations", "library", "api"].includes(view)) view = "overview";
@@ -545,6 +554,7 @@ function setView(view) {
   });
   history.replaceState(null, "", view === "overview" ? "/" : `/#${apiTarget || view}`);
   window.scrollTo({ top: 0, behavior: "auto" });
+  if (view === 'api' && !apiTarget) markApiChapter('api-start');
   if (apiTarget) requestAnimationFrame(() => {
     if (state.view === 'api' && location.hash === '#' + apiTarget) focusApiSection(apiTarget);
   });
@@ -4640,10 +4650,14 @@ async function loadApiKeys({background = false} = {}) {
       list.appendChild(row);
       if (focused?.keyId === key.id) (focused.keyAction === 'copy' ? copy : revoke).focus({preventScroll:true});
     }
+    const count = $('apiKeyCount');
+    if (count) count.textContent = `${list.childElementCount} 把密钥`;
     status.textContent = data.items.length ? '新建密钥可重复复制；撤销后将删除，已提交的请求可能继续执行。' : '还没有密钥，创建后即可接入。';
   } catch (_) {
     if (read !== apiKeyRead || (background && apiKeySignature !== null)) return;
     $('apiKeyList').replaceChildren();
+    const count = $('apiKeyCount');
+    if (count) count.textContent = '列表暂不可读取';
     status.textContent = '密钥管理暂不可用，请确认算力中心已连接。';
   }
 }
@@ -4938,24 +4952,37 @@ document.querySelectorAll("[data-view]").forEach((button) => button.addEventList
   }
   setView(button.dataset.view);
 }));
-document.querySelectorAll('[data-api-target]').forEach((button) => button.addEventListener('click', () => {
-  history.replaceState(null, '', button.dataset.apiTarget === 'api-music' ? '/#api-music' : '/#api');
+apiChapterButtons.forEach((button) => button.addEventListener('click', () => {
+  history.replaceState(null, '', '/#' + button.dataset.apiTarget);
   focusApiSection(button.dataset.apiTarget);
 }));
-document.querySelectorAll('[data-copy-code]').forEach((button) => button.addEventListener('click', async () => {
-  const source = $(button.dataset.copyCode);
-  if (!source) return;
-  try {
-    if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
-    await navigator.clipboard.writeText(source.textContent);
-    button.textContent = '已复制';
-    $('apiCopyStatus').textContent = '示例已复制，不会自动提交请求。';
-  } catch (_) {
-    button.textContent = '请手动选择复制';
-    $('apiCopyStatus').textContent = '自动复制不可用，请选择下方示例后复制。';
-  }
-  setTimeout(() => { button.textContent = '复制'; }, 3500);
-}));
+for (const button of document.querySelectorAll('[data-copy-code]')) {
+  const label = button.textContent;
+  let resetLabel;
+  button.addEventListener('click', async () => {
+    const source = $(button.dataset.copyCode);
+    if (!source) return;
+    const kind = source.id === 'apiBaseAddress' ? '地址' : '代码';
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+      await navigator.clipboard.writeText(source.textContent);
+      button.textContent = '已复制';
+      $('apiCopyStatus').textContent = kind + '已复制。';
+    } catch (_) {
+      const selection = window.getSelection();
+      if (selection) {
+        const range = document.createRange();
+        range.selectNodeContents(source);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      button.textContent = '请按 Ctrl+C';
+      $('apiCopyStatus').textContent = '请手动复制' + kind + '。';
+    }
+    clearTimeout(resetLabel);
+    resetLabel = setTimeout(() => { button.textContent = label; }, 3500);
+  });
+}
 $("refresh").addEventListener("click", () => window.location.reload());
 followWorkbenchReleases();
 $("projectSearch").addEventListener("input", renderProjects);

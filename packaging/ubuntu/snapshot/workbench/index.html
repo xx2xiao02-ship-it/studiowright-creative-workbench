@@ -327,13 +327,38 @@
           </section>
         </section>
         <section id="apiView" class="view api-view" aria-labelledby="apiHeading" hidden>
-          <div class="page-heading api-page-heading"><div><div class="eyebrow"><span></span> API / INTEGRATION</div><h1 id="apiHeading">API 文档</h1><p>查看请求地址、参数和返回结果。</p></div><div class="api-page-actions"><button id="apiCopyAll" class="button button-primary" type="button">一键复制完整文档</button><span id="apiCopyAllStatus" role="status" aria-live="polite"></span></div></div>
-          <div class="api-intro"><div><span class="api-intro-label">算力中心 · 统一接口</span><h2>请求与返回</h2><p>算力中心按请求类型分流：对话、推理、识图走 Gemini；生图、生视频走 Flow；音乐生成走音乐服务。不会根据正文改派通道。以上功能使用同一把算力中心密钥，无需 Google API 密钥。</p></div><div class="api-base"><span>统一 API 地址</span><code>http://127.0.0.1:18922</code><small>当前电脑或已建立转发的客户端</small></div></div>
-          <section class="api-key-manager" aria-labelledby="api-key-heading"><div class="api-key-heading"><div><span class="api-intro-label">API KEYS</span><h2 id="api-key-heading">密钥管理</h2><p>同一把密钥可调用本页所有需要鉴权的接口。</p></div></div><form id="apiKeyForm" class="api-key-form"><label for="apiKeyName">密钥名称</label><input id="apiKeyName" maxlength="48" required placeholder="例如：视频制作项目" autocomplete="off"><button id="apiKeyCreate" class="button button-primary" type="submit">创建密钥</button></form><p id="apiKeyStatus" class="api-key-status" role="status" aria-live="polite">正在读取密钥…</p><div id="apiKeyList" class="api-key-list"></div></section>
-          <nav class="api-jump" aria-label="API 文档目录"><button type="button" data-api-target="api-start">请求准备</button><button type="button" data-api-target="api-reasoning">对话与推理</button><button type="button" data-api-target="api-gemini-vision">上传图片并识别</button><button type="button" data-api-target="api-aigc">生成图片或视频</button><button type="button" data-api-target="api-music">音乐生成与音频</button><button type="button" data-api-target="api-reference">结果与下载</button></nav>
-          <div class="api-main">
+          <div class="page-heading api-page-heading">
+            <h1 id="apiHeading">API 文档</h1>
+            <div class="api-page-actions"><button id="apiCopyAll" class="button button-primary" type="button">复制完整文档</button><span id="apiCopyAllStatus" role="status"></span></div>
+          </div>
+          <section class="api-intro" aria-labelledby="apiAddressHeading">
+            <div class="api-base">
+              <div><h2 id="apiAddressHeading">统一 API 地址</h2><code id="apiBaseAddress">http://127.0.0.1:18922</code></div>
+              <button class="button button-light" type="button" data-copy-code="apiBaseAddress">复制地址</button>
+            </div>
+            <p>对话、推理和识图走 Gemini，图片和视频走 Flow，音乐生成走音乐服务。按请求类型分流，使用同一把算力中心密钥。客户端需连接本机 API 端口或建立转发。</p>
+          </section>
+          <details class="api-key-manager">
+            <summary><strong>密钥管理</strong><span id="apiKeyCount">正在读取…</span></summary>
+            <div class="api-key-body">
+              <form id="apiKeyForm" class="api-key-form"><label for="apiKeyName">密钥名称</label><input id="apiKeyName" maxlength="48" required placeholder="例如：视频制作项目" autocomplete="off"><button id="apiKeyCreate" class="button button-primary" type="submit">创建密钥</button></form>
+              <p id="apiKeyStatus" class="api-key-status" role="status">正在读取密钥…</p>
+              <div id="apiKeyList" class="api-key-list"></div>
+            </div>
+          </details>
+          <div class="api-layout">
+            <nav class="api-jump" aria-labelledby="apiDirectoryHeading">
+              <h2 id="apiDirectoryHeading">目录</h2>
+              <button type="button" data-api-target="api-start" aria-current="location">请求准备</button>
+              <button type="button" data-api-target="api-reasoning">对话与推理</button>
+              <button type="button" data-api-target="api-gemini-vision">上传图片并识别</button>
+              <button type="button" data-api-target="api-aigc">生成图片或视频</button>
+              <button type="button" data-api-target="api-music">音乐生成与音频</button>
+              <button type="button" data-api-target="api-reference">结果与下载</button>
+            </nav>
+            <div class="api-main">
             <section class="api-panel" aria-labelledby="api-start">
-              <div class="api-heading"><span>01</span><div><h2 id="api-start" tabindex="-1">请求准备</h2></div></div>
+              <div class="api-heading"><h2 id="api-start" tabindex="-1">请求准备</h2></div>
               <p>调用地址是 <code>http://127.0.0.1:18922</code>。远程连接时需保持算力中心的端口转发。请求带 <code>Authorization: Bearer &lt;算力中心密钥&gt;</code>；JSON 用 <code>application/json</code>，文件原始字节用 <code>application/octet-stream</code>。</p>
               <p>提交对话、识图或生成前，用 <code>Idempotency-Key</code> 传入并保存一个 UUID。超时或返回 <code>unknown</code> 时用原编号查询，不能换新编号重发。</p>
               <div class="api-endpoint"><b>GET</b><code>/health</code><span>统一 API 存活检查，不需要密钥；只说明 18922 端口可访问。</span></div>
@@ -364,9 +389,9 @@ def call(path, payload=None, request_id=None, *, file=None):
         return json.load(res)</code></pre>
             </section>
             <section class="api-panel" aria-labelledby="api-reasoning">
-              <div class="api-heading"><span>02</span><div><h2 id="api-reasoning" tabindex="-1">Gemini · 对话与推理</h2></div></div>
-              <div class="api-endpoint"><b>POST</b><code>/api/conversations</code><span>传 title，返回对话 id。</span></div>
-              <div class="api-endpoint"><b>POST</b><code>/api/real-pool/chat</code><span>传 conversation_id、account: "auto"、prompt，返回 request_id 和 status。</span></div>
+              <div class="api-heading"><h2 id="api-reasoning" tabindex="-1">Gemini · 对话与推理</h2></div>
+              <div class="api-endpoint"><b class="api-method-post">POST</b><code>/api/conversations</code><span>传 title，返回对话 id。</span></div>
+              <div class="api-endpoint"><b class="api-method-post">POST</b><code>/api/real-pool/chat</code><span>传 conversation_id、account: "auto"、prompt，返回 request_id 和 status。</span></div>
               <p>文字对话可选择 <code>gemini-4-neon</code>、<code>gemini-4-hydrogen</code> 和 <code>gemini-3.8-flash</code>。Neon、Hydrogen 的 <code>effort</code> 支持 <code>low</code>、<code>medium</code>、<code>high</code>、<code>xhigh</code>，默认 <code>high</code>。Flash 支持前三档，默认 <code>medium</code>。也可直接传完整型号，如 <code>gemini-4-neon-xhigh</code>。</p>
               <p>新对话首轮使用 <code>account: "auto"</code> 时，可加 <code>fallback_model</code>。只有高级池在发送前无可用账号时，才改用指定的 Flash 型号。查看返回的 <code>requested_model</code>、实际 <code>model</code> 和 <code>fallback.used</code>。两个池都不可用时，入队前返回 HTTP 409，入队后按原编号查询失败原因。</p>
               <p>续聊沿用实际绑定的模型系列和账号，允许修改同系列的思考等级。部分回复或结果未知时按原请求编号查询。高级池可派发账号数和共享额度见「总览 → Gemini 各账号额度」。</p>
@@ -388,9 +413,9 @@ print(call("/api/real-pool/chat", {
 # 后续用 call(f"/api/real-pool/requests/{rid}") 查询最终型号和回复。</code></pre>
             </section>
             <section class="api-panel" aria-labelledby="api-gemini-vision">
-              <div class="api-heading"><span>03</span><div><h2 id="api-gemini-vision" tabindex="-1">Gemini · 上传图片并识别</h2></div></div>
-              <div class="api-endpoint"><b>POST</b><code>/api/real-pool/uploads/{请求编号}/{序号}/{扩展名}</code><span>传图片原始字节。序号从 0 开始；返回 index、extension、sha256。</span></div>
-              <div class="api-endpoint"><b>POST</b><code>/api/real-pool/image-analysis</code><span>传 account: "auto"、prompt、attachments（上传回执数组），请求头沿用上传路径中的编号。返回 request_id、status 和 conversation_id。</span></div>
+              <div class="api-heading"><h2 id="api-gemini-vision" tabindex="-1">Gemini · 上传图片并识别</h2></div>
+              <div class="api-endpoint"><b class="api-method-post">POST</b><code>/api/real-pool/uploads/{请求编号}/{序号}/{扩展名}</code><span>传图片原始字节。序号从 0 开始；返回 index、extension、sha256。</span></div>
+              <div class="api-endpoint"><b class="api-method-post">POST</b><code>/api/real-pool/image-analysis</code><span>传 account: "auto"、prompt、attachments（上传回执数组），请求头沿用上传路径中的编号。返回 request_id、status 和 conversation_id。</span></div>
               <p>可传 1～4 张 JPG、PNG、WebP，单张最多 8 MiB、合计 16 MiB、单张不超过 2400 万像素。只校验时用 <code>POST /api/real-pool/image-analysis-validate</code>，参数相同，返回 <code>valid</code>、<code>submitted: false</code> 和 <code>image_count</code>。</p>
               <div class="api-code-head"><span>复制识图请求 · 默认只校验</span><button type="button" data-copy-code="api-code-gemini-vision">复制代码</button></div><pre class="api-code" tabindex="0"><code id="api-code-gemini-vision">files = [Path("产品.png"), Path("场景.jpg")]
 rid = str(uuid4())
@@ -404,8 +429,8 @@ print(call("/api/real-pool/image-analysis-validate", payload, rid))
 # 正式识图：print(call("/api/real-pool/image-analysis", payload, rid))</code></pre>
             </section>
             <section class="api-panel" aria-labelledby="api-aigc">
-              <div class="api-heading"><span>04</span><div><h2 id="api-aigc" tabindex="-1">Flow · 生成图片或视频</h2></div></div>
-              <div class="api-endpoint"><b>POST</b><code>/api/real-pool/flow</code><span>传 kind、confirm: true 和 params。返回 request_id、status、task_id；submitted 表示已排队。</span></div>
+              <div class="api-heading"><h2 id="api-aigc" tabindex="-1">Flow · 生成图片或视频</h2></div>
+              <div class="api-endpoint"><b class="api-method-post">POST</b><code>/api/real-pool/flow</code><span>传 kind、confirm: true 和 params。返回 request_id、status、task_id；submitted 表示已排队。</span></div>
               <p>Flow 确认接收视频后释放派发名额，其他账号可以继续上传和提交。同账号依次处理自己的任务，已提交视频由算力中心跟进并下载。提交后保留原 <code>task_id</code>，可继续提交新请求并轮询前一条的结果。</p>
                <p>图片在 <code>params</code> 里填写 <code>prompt</code>、<code>model</code>、<code>aspect</code>、<code>count</code>；视频额外填写 <code>resolution</code>、<code>duration</code>。模型 ID 从快照取。时长按模型区分：Omni 1.1 Flash 为 4/6/8/10 秒，Omni 1.2 Flash 为 3～15 秒连续可调；画面比例 16:9 或 9:16。账号和项目由算力中心安排；积分按 Flow 实际报价计费，平台不设单笔上限。单图或单视频在请求顶层传 <code>"auto_retry": false</code> 后只尝试一次。</p>
               <div class="api-code-head"><span>复制纯文字生成请求 · 实际提交</span><button type="button" data-copy-code="api-code-generate">复制代码</button></div><pre class="api-code" tabindex="0"><code id="api-code-generate">rid = str(uuid4())
@@ -418,7 +443,7 @@ payload = {
 }
 print(call("/api/real-pool/flow", payload, rid))</code></pre>
               <h3>带参考素材</h3>
-              <div class="api-endpoint"><b>POST</b><code>/api/real-pool/flow-references/auto/{素材 UUID}/{扩展名}</code><span>逐个上传文件原始字节，返回 reference_id。上传、校验和提交使用同一个 Idempotency-Key，不填账号或项目。</span></div>
+              <div class="api-endpoint"><b class="api-method-post">POST</b><code>/api/real-pool/flow-references/auto/{素材 UUID}/{扩展名}</code><span>逐个上传文件原始字节，返回 reference_id。上传、校验和提交使用同一个 Idempotency-Key，不填账号或项目。</span></div>
               <div class="api-table-wrap"><table class="api-table"><thead><tr><th scope="col">模式</th><th scope="col">在 params 中添加</th></tr></thead><tbody><tr><td>图生图</td><td><code>mode: "image-to-image"</code> 和 <code>reference_ids</code>（图片编号数组）</td></tr><tr><td>Omni 首帧或首尾帧</td><td><code>mode: "frames"</code>、<code>start_reference_id</code>，可选 <code>end_reference_id</code>（图片编号）</td></tr><tr><td>Omni 混合参考</td><td><code>model: "omni-flash-1.1"</code>、<code>mode: "ingredients"</code> 和 <code>reference_ids</code>（图片、MP4 编号数组）</td></tr></tbody></table></div>
               <p>参考文件支持 JPG、PNG、WebP 和上述模式允许的 MP4，不接收独立音频。单文件最多 8 MiB、合计 64 MiB，编号 24 小时有效。单图或单视频由平台统一启用换号重试，最多换 3 个账号；重试行为不受调用方控制。图片只在确认未发送时重试；视频重试沿用原任务的时长与清晰度。结果不明不重发。查询和下载始终用原任务编号。只校验时发送 <code>POST /api/real-pool/flow-validate</code> 并设 <code>confirm: false</code>，返回 <code>valid</code>、<code>submitted: false</code> 和 <code>reference_count</code>。</p>
               <div class="api-code-head"><span>复制参考素材请求 · 默认只校验</span><button type="button" data-copy-code="api-code-flow-references">复制代码</button></div><pre class="api-code" tabindex="0"><code id="api-code-flow-references">rid = str(uuid4())
@@ -436,8 +461,8 @@ payload = {
 print(call("/api/real-pool/flow-validate", payload, rid))
 # 正式提交：将 confirm 改成 True，再调用 /api/real-pool/flow。</code></pre>
             </section>
-            <section class="api-panel" aria-labelledby="api-music"><div class="api-heading"><span>05</span><div><h2 id="api-music" tabindex="-1">音乐生成与音频</h2><p>在 18922 端口提交音乐生成任务、查询进度，并从素材库筛选和下载音频。沿用算力中心密钥。</p></div></div>
-              <div class="api-endpoint"><b>POST</b><code>/api/music/jobs</code><span>返回202和job。request_id 必填 UUID，保存后用于查询；Idempotency-Key 如传入必须一致。</span></div>
+            <section class="api-panel" aria-labelledby="api-music"><div class="api-heading"><h2 id="api-music" tabindex="-1">音乐生成与音频</h2><p>在 18922 端口提交音乐生成任务、查询进度，并从素材库筛选和下载音频。沿用算力中心密钥。</p></div>
+              <div class="api-endpoint"><b class="api-method-post">POST</b><code>/api/music/jobs</code><span>返回202和job。request_id 必填 UUID，保存后用于查询；Idempotency-Key 如传入必须一致。</span></div>
               <div class="api-endpoint"><b>GET</b><code>/api/music/jobs/{request_id}</code><span>只查询原任务，不重新生成；不存在返回404。</span></div>
               <p>prompt：1～2000字。model：lyria-fast（默认，Lyria 3.5 Fast）、lyria（Lyria 3.5）、lyria-pro（Lyria 3 Pro）、lyria-pro-fast（Lyria 3 Pro Fast）。时长写进提示词，不保证精确时长。</p>
               <p>tags：可选字符串数组，最多30个，每个1～80字；style_id：可选1～256字非空字符串。手动标签和画风 ID 原样保存，不传照常生成入库。auto_tags 从提示词自动提取，表示生成要求，不代表音频分析；未识别内容不猜测，不调用额外模型，不覆盖手动标签。</p>
@@ -478,11 +503,11 @@ query = urlencode({&quot;kind&quot;: &quot;audio&quot;, &quot;audio_category&quo
 print(call(&quot;/api/library?&quot; + query))</code></pre>
             </section>
             <section class="api-panel" aria-labelledby="api-reference">
-              <div class="api-heading"><span>06</span><div><h2 id="api-reference" tabindex="-1">结果与下载</h2></div></div>
+              <div class="api-heading"><h2 id="api-reference" tabindex="-1">结果与下载</h2></div>
               <div class="api-endpoint"><b>GET</b><code>/api/real-pool/requests/{请求编号}</code><span>查询文字或识图。status 为 completed 时，response 是回复；处理中继续查，失败或未知时读 note。</span></div>
               <div class="api-endpoint"><b>GET</b><code>/api/real-pool/flow-requests/{请求编号}</code><span>查询提交记录。task_id 始终是原任务号，task 是最新执行结果。</span></div>
               <div class="api-endpoint"><b>GET</b><code>/api/tasks/{原任务编号}</code><span>直接查询最新状态和下载路径，换号重试后仍用原任务号。</span></div>
-              <div class="api-endpoint"><b>POST</b><code>/api/tasks/{原任务编号}/retry</code><span>确认单图失败后，沿用该次的账号、项目和参数，继续使用原任务号。请求体为 <code>{"expected_ordinal":0,"confirm_generation":true}</code>。</span></div>
+              <div class="api-endpoint"><b class="api-method-post">POST</b><code>/api/tasks/{原任务编号}/retry</code><span>确认单图失败后，沿用该次的账号、项目和参数，继续使用原任务号。请求体为 <code>{"expected_ordinal":0,"confirm_generation":true}</code>。</span></div>
               <p><code>expected_ordinal</code> 填原任务里最近一次已核对尝试的 <code>ordinal</code>，首次为 <code>0</code>。同一个尝试序号重复提交只补跑一次。收到 <code>202</code> 后继续查原任务号。任务结果待核对或已变化时，接口返回 <code>409</code>。</p>
               <div class="api-endpoint"><b>GET</b><code>/api/tasks/{任务编号}/files/{序号}</code><span>下载生成文件。使用任务的 downloads[].path，带同一密钥，返回文件字节。</span></div>
               <div class="api-code-head"><span>复制查询与下载</span><button type="button" data-copy-code="api-code-result">复制代码</button></div><pre class="api-code" tabindex="0"><code id="api-code-result"># rid 为发送时保存的编号。查文字或识图：
@@ -501,6 +526,7 @@ if record.get("task_id"):
               <p>已入库素材：<code>GET /api/library?page=1&amp;limit=24</code> 查列表，<code>GET /api/library/{素材ID}</code> 查详情，<code>GET /api/library/{素材ID}/file</code> 下载原文件。</p>
               <p>错误通常返回 <code>{"error":"原因"}</code>。<code>401</code> 检查密钥，<code>400</code> 检查请求参数，<code>404</code> 核对路径或编号，<code>409</code> 先查询原任务。<code>GET /health</code> 检查 18922 API 是否可访问，无需密钥。</p>
             </section>
+            </div>
           </div>
           <dialog id="apiKeyDialog" class="api-copy-dialog api-key-dialog" aria-labelledby="apiKeyDialogHeading"><h2 id="apiKeyDialogHeading">密钥创建成功</h2><p id="apiKeyDialogHelp">密钥已加密保存，以后可在列表中再次复制。</p><label for="apiKeySecret">密钥</label><textarea id="apiKeySecret" readonly rows="2"></textarea><div class="api-key-dialog-actions"><button id="apiKeyCopy" class="button button-primary" type="button">复制密钥</button><button id="apiKeyDone" class="button button-light" type="button">完成</button></div><p id="apiKeyCopyStatus" role="status" aria-live="polite"></p></dialog>
           <p id="apiCopyStatus" class="sr-only" role="status" aria-live="polite"></p>
