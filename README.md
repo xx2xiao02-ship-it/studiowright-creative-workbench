@@ -10,6 +10,8 @@ Windows 和 Ubuntu 安装包在本仓库的「Releases」下载。见 [安装说
 
 [Windows 与 Ubuntu 部署手册](docs/DEPLOYMENT.md)包含源码目录、环境准备、账号接入、打包、验收和升级回退方法。
 
+[代码地图与维护路线](docs/CODEBASE.md)包含各模块入口、运行版本核对结果和整理优先级。
+
 Windows、Ubuntu、统一 API、账号治理、Gemini、Flow 与素材库的关系见 [全项目工作拓扑](docs/WORKFLOW.md)，含调度、恢复及内容交接分图。
 
 ## 项目内容

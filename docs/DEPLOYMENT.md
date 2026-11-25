@@ -16,7 +16,7 @@ Windows 安装桌面操作端，通过 SSH 打开 Ubuntu 上的工作台。Ubunt
 | 音乐后台补丁 | [`packaging/music`](../packaging/music) | FlowMusic2API 的会话续期和账号优先级补丁，音乐服务本体单独部署 |
 | 功能测试 | [`tests`](../tests) | Flow 窗口与素材、Gemini、音乐、API 和恢复逻辑 |
 
-开发机工作区中的 `github-upload/studiowright-creative-workbench/` 是 Git 发布工作副本。`unified-workbench/` 保存较早的工作台源码、本机入口及部署历史。`coordinator/` 保存独立调度服务源码及运维记录。`release-workflow/` 和 `安装包/` 保存本地构建与验收材料。构建前以 Git `main` 和目标提交为准。完整的任务走向见 [工作拓扑](WORKFLOW.md)。
+发布以 GitHub `main` 上的目标提交为准，在干净的 Git 工作副本中构建。开发机的 `unified-workbench/` 仍有 Windows 自动复用连接所需的启动入口。`coordinator/` 保存独立调度服务源码及运维记录，`release-workflow/` 和 `安装包/` 保存本地构建与验收材料。目录用途及整理顺序见 [代码地图](CODEBASE.md)，任务走向见 [工作拓扑](WORKFLOW.md)。
 
 ### 端口与网络
 
@@ -202,13 +202,14 @@ journalctl --user -u creative-unified-workbench.service -u studiowright-console.
 
 ### Ubuntu 安装包
 
-在 Ubuntu 24.04 x86-64、Python 3.12 环境准备离线 wheel 目录。可使用现有已校验的 wheel 集合，也可从受信任的软件源按锁定清单下载。构建脚本会打包快照、离线依赖和清单。打包后在隔离的 Ubuntu 24.04 上执行第 2 节和第 5 节。部署机已有生产数据时，先验证 `inspect` 或 `reuse`。
+在 Ubuntu 24.04 x86-64、Python 3.12 环境准备离线 wheel 目录。可使用现有已校验的 wheel 集合，也可从受信任的软件源按锁定清单下载。构建脚本会验证清单中的快照文件和指纹，并打包已校验快照与离线依赖。修改快照源码时，先检查 Git 变更并将新增快照文件纳入 Git，再用 `--refresh-snapshot` 更新清单，随对应源码一起提交。打包后在隔离的 Ubuntu 24.04 上执行第 2 节和第 5 节。部署机已有生产数据时，先验证 `inspect` 或 `reuse`。
 
 ```bash
 python3.12 -m venv .venv-build
 .venv-build/bin/python -m pip download --only-binary=:all: \
   --dest packaging/ubuntu/wheelhouse-linux/flow \
   -r packaging/ubuntu/snapshot/flow/requirements-frozen.txt
+.venv-build/bin/python -B packaging/ubuntu/build_server.py --check-snapshot
 .venv-build/bin/python -B packaging/ubuntu/build_server.py
 sha256sum packaging/ubuntu/dist/StudioWright-Ubuntu-24.04-Setup-*.run
 ```

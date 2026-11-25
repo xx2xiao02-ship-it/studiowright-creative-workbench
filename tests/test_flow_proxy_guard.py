@@ -19,6 +19,7 @@ class FlowProxyGuard(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.root)
         self.mapping = self.root / 'bin/exit-map.txt'
         self.mapping.write_text('account-a 3101\naccount-b 3102\n', encoding='utf-8')
+        self.mapping.chmod(0o600)
         self.profile = '--user-data-dir=' + str(self.root / 'data/profiles/account-a')
         if sys.platform == 'win32':
             lstat = Path.lstat

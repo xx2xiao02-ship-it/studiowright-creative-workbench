@@ -1,10 +1,17 @@
 import importlib.util
+import sys
 import unittest
 from datetime import datetime
 from pathlib import Path
-spec=importlib.util.spec_from_file_location('credit_reader',Path(__file__).parents[1]/'packaging/ubuntu/snapshot/flow/console/balance_reader.py')
-reader=importlib.util.module_from_spec(spec)
-spec.loader.exec_module(reader)
+from unittest.mock import patch
+
+CONSOLE = Path(__file__).resolve().parents[1] / 'packaging/ubuntu/snapshot/flow/console'
+spec = importlib.util.spec_from_file_location('credit_reader', CONSOLE / 'balance_reader.py')
+reader = importlib.util.module_from_spec(spec)
+with patch.object(sys, 'path', [str(CONSOLE), *sys.path]):
+    spec.loader.exec_module(reader)
+
+
 class CreditRenewalTest(unittest.TestCase):
     def test_official_tooltip(self):
         self.assertEqual(reader.parse_credit_renewal('1,050 个 Google Flow 点数\n重置时间：11月19日20:30',datetime(2026,11,10)),'2026-11-19 20:30')

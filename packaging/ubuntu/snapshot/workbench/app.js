@@ -449,9 +449,9 @@ function accountIssues(account, snapshot = state.snapshot, geminiRow = null,
     ['image','video'].includes(t.kind) && ['queued','running'].includes(t.status));
   if (signIn) add('flow_page_state', signIn.label, signIn.text, '');
   else if (pageState === 'unique')
-    add('flow_page_state', '固定任务窗口待复查', '工作台会保留已绑定的任务页，只关闭同项目确认空的副本。', '');
+    add('flow_page_state', '固定任务窗口待复查', '算力中心会保留已绑定的任务页，只关闭同项目确认空的副本。', '');
   else if (pageState === 'draft')
-    add('flow_page_state', '固定任务窗口有草稿或附件', '工作台会保留草稿。处理后再检查就绪。', '');
+    add('flow_page_state', '固定任务窗口有草稿或附件', '算力中心会保留草稿。处理后再检查就绪。', '');
   else if (pageState && pageState !== 'ok' && !(pageState === 'busy' && activeFlow))
     add('flow_page_state', '页面未就绪：' + ({overlay:'页面有弹窗待关闭', binding:'窗口绑定待核对', project:'页面停在非标准项目', unconfirmed:'页面状态待确认', busy:'页面忙', draft:'有草稿待核对', load_failed:'固定任务页加载失败'}[pageState] || pageState), '点一键就绪，算力中心会把页面带回标准项目并复查。', '使用一键就绪。');
   const windowIssue = flowWindowIssue(account.profile, snapshot);
@@ -1303,7 +1303,7 @@ function flowGovernance(snapshot, fresh = state.snapshotFresh, verifiedEmpty = n
     if (!window || !['idle','preparing','submitting','submitted','generated','downloading','blocked_draft','result_unknown','needs_verification'].includes(window.state))
       add('flow_binding','任务窗口运行状态待核对','打开 Flow 页的「账号检查记录」核对固定窗口。');
     if (window?.state==='blocked_draft' && !(verifiedEmpty.has(account.profile) && window.updated <= probeStartedAt))
-      add('flow_draft','固定任务窗口有草稿或附件','工作台会保留草稿。处理后再检查就绪。');
+      add('flow_draft','固定任务窗口有草稿或附件','算力中心会保留草稿。处理后再检查就绪。');
     if (!issues.some(issue=>issue.key.startsWith('flow_window_') || issue.key==='flow_draft')) {
       const life=lifecycle.get(account.profile);
       if (c?.window_lifecycle_available!==true || life?.unique_ok!==1)
@@ -1618,10 +1618,10 @@ function auditFlowAccounts(snapshot, dispatch, pageChecks, probeStartedAt) {
     const repair=pageChecks?.repairs?.[profile];
     const pageIssues={
       binding:['固定任务窗口绑定待核对','在 Flow 页的「账号检查记录」核对这个账号的固定窗口和项目。'],
-      unique:['固定任务窗口待复查','工作台保留已绑定的任务页，只关闭同项目确认空的副本。'],
+      unique:['固定任务窗口待复查','算力中心保留已绑定的任务页，只关闭同项目确认空的副本。'],
       project:['任务窗口不在该账号的已登记项目','核对对应项目与固定窗口绑定。'],
       load_failed:['固定任务页加载失败','点 Flow 一键就绪，刷新原任务页并复查。'],
-      draft:['固定任务窗口有草稿或附件','工作台会保留草稿。处理后再检查就绪。'],
+      draft:['固定任务窗口有草稿或附件','算力中心会保留草稿。处理后再检查就绪。'],
       overlay:['任务页有弹窗挡住输入','在原窗口核对提示；如需验证，请按官方提示完成。'],
       editor:['任务页未确认可用的输入框','核对页面是否加载完成或是否需要更新。']};
     const signIn = flowLoginNotice(page);
