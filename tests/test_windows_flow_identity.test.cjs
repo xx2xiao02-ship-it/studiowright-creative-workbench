@@ -37,7 +37,11 @@ function fixture(pages, activeId, receipt = null) {
                     getClientRects: () => [{}], getAttribute: () => null,
                     click() { stats.clicks++; page.url = 'https://flow.google.com/'; page.email = expected; },
                 };
-                realm.document = {querySelectorAll: selector => selector === 'button' ? [button] : []};
+                const accountLabels = (page.accountLabels || []).map(email => ({
+                    getClientRects: () => [{}],
+                    getAttribute: name => name === 'aria-label' ? `Google Account: ${email}` : null,
+                }));
+                realm.document = {querySelectorAll: selector => selector === 'button' ? [button] : accountLabels};
                 return [{result: await func(...args)}];
             },
         },
@@ -72,6 +76,32 @@ test('a signed-in active tab with a different identity stops sync', async () => 
     ], 1);
     await assert.rejects(run(`swPrepareFlowAccount('${expected}')`), /不一致/);
     assert.equal(stats.opened + stats.clicks + stats.cookieReads, 0);
+});
+
+test('a second account in the Google menu does not obscure the active Flow identity', async () => {
+    const {run} = fixture([{
+        id: 1, url: 'https://flow.google.com/', email: expected,
+        accountLabels: [expected, 'another@example.test'],
+    }], 1);
+    assert.equal(await run(`swPrepareFlowAccount('${expected}')`), expected);
+});
+
+test('the selected account in the Google menu cannot override a different active Flow identity', async () => {
+    const {stats, run} = fixture([{
+        id: 1, url: 'https://flow.google.com/', email: 'another@example.test',
+        accountLabels: [expected],
+    }], 1);
+    await assert.rejects(run(`swPrepareFlowAccount('${expected}')`), /不一致/);
+    assert.equal(stats.cookieReads, 0);
+});
+
+test('visible account labels are usable only when they identify one account', async () => {
+    const page = {id: 1, url: 'https://flow.google.com/', accountLabels: [expected]};
+    const {stats, run} = fixture([page], 1);
+    assert.equal(await run(`swPrepareFlowAccount('${expected}')`), expected);
+    page.accountLabels.push('another@example.test');
+    await assert.rejects(run(`swPrepareFlowAccount('${expected}')`), /未能唯一识别/);
+    assert.equal(stats.cookieReads, 0);
 });
 
 test('checking a queued receipt never opens Flow or collects cookies again', async () => {

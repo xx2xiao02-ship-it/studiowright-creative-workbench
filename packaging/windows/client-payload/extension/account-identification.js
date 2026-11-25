@@ -7,18 +7,20 @@ async function readFlowAccount(tabId) {
         target: {tabId},
         world: 'MAIN',
         func: () => {
-            const emails = new Set();
-            const add = value => {
-                const email = String(value || '').trim().toLowerCase();
-                if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) emails.add(email);
-            };
             if (location.hostname !== 'flow.google.com') return [];
-            add((window.WIZ_global_data || {}).oPEP7c);
+            const current = window.WIZ_global_data?.oPEP7c;
+            // Account menus can also list other signed-in Google accounts.
+            if (typeof current === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(current.trim())) {
+                return [current.trim().toLowerCase()];
+            }
+            const emails = new Set();
             for (const node of document.querySelectorAll('[aria-label],[title]')) {
                 if (!node.getClientRects().length) continue;
                 const text = [node.getAttribute('aria-label'), node.getAttribute('title')].filter(Boolean).join(' ');
                 if (!/(Google\s*(Account|账号|帳戶|帐户)|Google-Konto|Compte Google)/i.test(text)) continue;
-                for (const email of text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || []) add(email);
+                for (const email of text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || []) {
+                    emails.add(email.toLowerCase());
+                }
             }
             return [...emails];
         }
