@@ -133,6 +133,10 @@ class ImportRestored(ValueError):
     """The previous browser login was restored after an unsuccessful import."""
 
 
+class ImportRestoredOnCancel(asyncio.CancelledError):
+    """An interrupted import safely restored the previous browser login."""
+
+
 async def inject_verified(context, page, bundle, read_state, vault, *, finalize, check_warning=None):
     """A successful write is not authentication. Restore old cookies on failure."""
     from login_readiness import read_when_ready, resume_google_session
@@ -190,7 +194,7 @@ async def inject_verified(context, page, bundle, read_state, vault, *, finalize,
                 "登录导入未成功，原登录资料恢复失败。已停止此账号的任务，请使用远程登录检查。"
             ) from None
         if isinstance(error, asyncio.CancelledError):
-            raise
+            raise ImportRestoredOnCancel() from None
         raise ImportRestored(failure + "。已恢复原登录资料，可重新导入或使用远程登录。") from None
     finally:
         if restored:

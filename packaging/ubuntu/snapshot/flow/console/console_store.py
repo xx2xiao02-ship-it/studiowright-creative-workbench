@@ -10,6 +10,7 @@ from pathlib import Path
 MAX_GENERATION_RETRIES = 3
 SAFE_VIDEO_RETRY = frozenset(('transient_before_submit', 'provider_rejected_unusual'))
 RETRY_KINDS = frozenset(('image', 'video'))
+SESSION_IMPORT_INTERRUPTED = '登录核对因后台重启中断。请从 Windows 账号助手重新发起同步。'
 
 
 class Store:
@@ -254,7 +255,25 @@ class Store:
             db.execute("UPDATE flow_retry_roots SET state='interrupted',updated=? WHERE root_id IN (SELECT a.root_id FROM flow_retry_attempts a JOIN tasks t ON t.id=a.task_id WHERE t.status='running')", (now,))
             db.execute("UPDATE flow_retry_roots SET state='interrupted',updated=? WHERE root_id IN (SELECT root_id FROM flow_retry_executions WHERE status='running')", (now,))
             db.execute("UPDATE flow_retry_executions SET status='interrupted',finished=?,error='后台曾中断；重试可能已提交，请先核对原任务。' WHERE status='running'", (now,))
-            db.execute("UPDATE tasks SET status='interrupted',finished=?,error='后台曾中断；任务可能已提交，不会自动重试。请先核对原任务和项目素材。' WHERE status='running'", (now,))
+            db.execute("""UPDATE tasks SET status='interrupted',finished=?,error=CASE kind
+                        WHEN 'session_import' THEN ?
+                        ELSE '后台曾中断；任务可能已提交，不会自动重试。请先核对原任务和项目素材。'
+                        END WHERE status='running'""", (now, SESSION_IMPORT_INTERRUPTED))
+
+    def requeue_restored_import(self, ident):
+        with closing(self.connect()) as db, db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute("SELECT params FROM tasks WHERE id=? AND kind='session_import' AND status='running'",
+                             (ident,)).fetchone()
+            if row is None:
+                return False
+            params = json.loads(row['params'])
+            if params.get('restart_retries', 0) != 0:
+                return False
+            params['restart_retries'] = 1
+            db.execute("UPDATE tasks SET status='queued',started=NULL,finished=NULL,error=NULL,params=? WHERE id=?",
+                       (json.dumps(params), ident))
+            return True
 
     def claim(self, busy, generation_allowed=None, retry_switch_allowed=None, generation_shareable=None,
               active_generation_projects=None, request_keys=None, *, session_import_allowed=None):

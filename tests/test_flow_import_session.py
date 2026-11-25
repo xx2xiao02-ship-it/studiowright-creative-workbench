@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "packaging/ubuntu/snapshot/flow/console"))
-from login_sessions import ImportRestored, inject_verified
+from login_sessions import ImportRestored, ImportRestoredOnCancel, inject_verified
 
 
 class ImportSessionTest(unittest.IsolatedAsyncioTestCase):
@@ -35,7 +35,7 @@ class ImportSessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.context.clear_cookies.await_count, 2)
 
     async def test_cancel_restores_previous_login(self):
-        with self.assertRaises(asyncio.CancelledError):
+        with self.assertRaises(ImportRestoredOnCancel):
             await inject_verified(self.context, self.page, self.bundle, "state", self.vault,
                                   finalize=AsyncMock(side_effect=asyncio.CancelledError))
         self.context.add_cookies.assert_awaited_with(self.old)

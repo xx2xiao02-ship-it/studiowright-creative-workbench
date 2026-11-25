@@ -23,12 +23,12 @@ from account_pacing import account_status, resume_after_review
 from adapter import AccountWindowBusy, PreSubmissionTransient, PreSubmissionFailure
 from api_keys import APIKeys
 from account_insights import Insights
-from console_store import MAX_GENERATION_RETRIES, RETRY_KINDS, Store
+from console_store import MAX_GENERATION_RETRIES, RETRY_KINDS, SESSION_IMPORT_INTERRUPTED, Store
 from dispatch_limit import DispatchLimit
 from flow_proxy_guard import mapped_ports, reserve_confirmed_exit
 from flow_references import REFERENCE_FIELDS, ReferenceStore, task_reference_ids
 from web_auth import WebAuth
-from login_sessions import Vault, normalize_bundle
+from login_sessions import ImportRestoredOnCancel, Vault, normalize_bundle
 from material_library import Library
 from material_tags import SEARCH_LABELS
 from preflight import pilot_dispatch_reasons
@@ -168,6 +168,7 @@ class Console:
             self.release_profile(task)
             raise
         before = []
+        keep_bundle = False
         try:
             before = [dict(r)["id"] for r in self.adapter.source_jobs(task["profile"])]
             account = self.store.account(task["profile"])
@@ -186,6 +187,12 @@ class Console:
                 from task_coordinator import Coordinator
                 result['self_recovery'] = [e for e in Coordinator().events(task['id']) if e['created'] >= (task.get('started') or 0)]
             self.store.finish(task["id"], result, attempt_ordinal=ordinal)
+        except ImportRestoredOnCancel:
+            if task['kind'] == 'session_import':
+                with contextlib.suppress(OSError, ValueError, sqlite3.Error):
+                    self.vault.get(task['params']['bundle_id'])
+                    keep_bundle = self.store.requeue_restored_import(task['id'])
+            raise
         except asyncio.CancelledError:
             # Leave running state for recovery. Never imply generation was cancelled.
             raise
@@ -256,7 +263,7 @@ class Console:
                 result['self_recovery'] = [e for e in Coordinator().events(task['id']) if e['created'] >= (task.get('started') or 0)]
             self.store.finish(task["id"], result, safe_error(exc) or type(exc).__name__, retry_evidence, attempt_ordinal=ordinal)
         finally:
-            if task["kind"] == "session_import":
+            if task["kind"] == "session_import" and not keep_bundle:
                 with contextlib.suppress(Exception):
                     self.vault.remove(task["params"]["bundle_id"])
             self.release_profile(task)
@@ -741,6 +748,8 @@ class Console:
         row['retry'] = retry
         if row["kind"] == "session_import":
             row["params"] = {"expected_email": row["params"].get("expected_email")}
+            if row['status'] == 'interrupted':
+                row['error'] = SESSION_IMPORT_INTERRUPTED
         return row
 
 
@@ -1426,14 +1435,17 @@ def create_app(root, adapter, test=False):
             return JSONResponse({"error": "登录同步记录不存在。"}, status_code=404)
         result = row.get('result') or {}
         message = result.get('message')
-        if row['status'] == 'queued' and c.session_import_waits_for_proxy(row['profile'], row['params'].get('expected_email')):
-            message = WAITING_FOR_PROXY
+        if row['status'] == 'queued':
+            if c.session_import_waits_for_proxy(row['profile'], row['params'].get('expected_email')):
+                message = WAITING_FOR_PROXY
+            elif row['params'].get('restart_retries'):
+                message = '后台重启前已恢复原登录资料，正在排队自动重新核对。'
         return JSONResponse(
             {
                 "id": row["id"],
                 "status": row["status"],
                 "email": result.get("email"),
-                "error": row.get("error"),
+                "error": SESSION_IMPORT_INTERRUPTED if row['status'] == 'interrupted' else row.get("error"),
                 "message": message,
                 "project_count": len(result.get("projects", [])),
             }

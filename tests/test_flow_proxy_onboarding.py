@@ -8,7 +8,7 @@ import sys
 from threading import Barrier, Event
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from starlette.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
@@ -18,6 +18,7 @@ SNAPSHOT = Path(__file__).resolve().parents[1] / 'packaging/ubuntu/snapshot'
 sys.path[:0] = [str(SNAPSHOT / name) for name in ('flow/console', 'workbench', 'flow/source/src')]
 from adapter import FakeAdapter
 from flow_proxy_guard import mapped_ports, reserve_confirmed_exit
+from login_sessions import ImportRestoredOnCancel
 
 spec = spec_from_file_location('flow_proxy_onboarding_console', SNAPSHOT / 'flow/console/server.py')
 server = module_from_spec(spec)
@@ -215,6 +216,44 @@ class WindowsProxyOnboarding(unittest.TestCase):
         self.assertEqual(self.claim()['id'], other['id'])
         asyncio.run(self.console.execute(active))
         self.assertEqual(self.claim()['id'], second['id'])
+
+    def test_confirmed_rollback_requeues_same_import_once_across_restart(self):
+        profile, email = 'existing', 'existing@example.test'
+        self.store.add_account(profile, profile)
+        self.store.update_account(profile, email, 'verified')
+        item = self.sync(email)
+        active = self.claim()
+        ident = active['params']['bundle_id']
+        with patch.object(self.adapter, 'run', new=AsyncMock(side_effect=ImportRestoredOnCancel)):
+            with self.assertRaises(ImportRestoredOnCancel):
+                asyncio.run(self.console.execute(active))
+            self.store.recover()
+            queued = self.store.task(item['id'])
+            self.assertEqual(queued['status'], 'queued')
+            self.assertEqual(self.console.vault.get(ident)['email'], email)
+            self.assertIn('自动重新核对', self.client.get('/api/plugin/session/' + item['id'],
+                                                           headers=self.headers).json()['message'])
+            second_attempt = self.claim()
+            self.assertEqual(second_attempt['id'], item['id'])
+            with self.assertRaises(ImportRestoredOnCancel):
+                asyncio.run(self.console.execute(second_attempt))
+        self.store.recover()
+        final = self.client.get('/api/plugin/session/' + item['id'], headers=self.headers).json()
+        self.assertEqual(final['status'], 'interrupted')
+        self.assertEqual(final['error'], server.SESSION_IMPORT_INTERRUPTED)
+        self.assertFalse(self.console.vault.path(ident).exists())
+
+    def test_unconfirmed_rollback_does_not_requeue_import(self):
+        profile, email = 'existing', 'existing@example.test'
+        self.store.add_account(profile, profile)
+        self.store.update_account(profile, email, 'verified')
+        item = self.sync(email)
+        active = self.claim()
+        with patch.object(self.adapter, 'run', new=AsyncMock(side_effect=asyncio.CancelledError)):
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(self.console.execute(active))
+        self.store.recover()
+        self.assertEqual(self.store.task(item['id'])['status'], 'interrupted')
 
     def test_concurrent_profiles_cannot_share_the_last_exit(self):
         self.add_spare()
