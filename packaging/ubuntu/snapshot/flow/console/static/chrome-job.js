@@ -89,9 +89,10 @@ async function runChromeJob(nonce){
    if(!localBridgeIds.includes(job.extension_id))throw Error('安装检查链接无效，请从本机账号管理重新发起。');
    statusText.textContent='正在检查插件和 Windows 共享组件…';
    const probe=await pluginCommand(job.extension_id,{action:'sw_probe'},5000);
-   if(probe.nativeReady===undefined)throw Error('当前插件版本尚不支持连接检查，请重新加载新版账号助手。');
+   const version=/^\d+(?:\.\d+){1,3}$/.test(probe.version||'') ? `（已加载版本 ${probe.version}）` : '';
+   if(probe.nativeReady===undefined)throw Error(`当前插件版本尚不支持连接检查${version}，请重新加载新版账号助手。`);
    if(probe.nativeReady!==true)throw Error('插件已加载，Windows 共享组件未接通。请修复 StudioWright 桌面版后再检查。');
-   const message=probe.connected ? '插件和共享组件可用，可以发起同步。' : '插件和共享组件可用，首次同步时会连接 Ubuntu。';
+   const message=(probe.connected ? '插件和共享组件可用，可以发起同步。' : '插件和共享组件可用，首次同步时会连接 Ubuntu。')+version;
    await report('succeeded',message);
    showResult(message);
    return;
