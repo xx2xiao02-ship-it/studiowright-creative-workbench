@@ -50,13 +50,13 @@ function swNormalizeEmail(value) {
 
 // Read the identity of the Chrome profile explicitly selected for this job.
 // The page already has read-only access to its own local profile manager.
-async function swExpectedFromJob(sender) {
+async function swExpectedFromJob(sender, status = 'running') {
     if (!Number.isInteger(sender?.tab?.id)) throw new Error('无法确认所选 Chrome 用户，已停止采集。');
     let results;
     try {
         results = await chrome.scripting.executeScript({
-        target: {tabId: sender.tab.id}, world: 'MAIN',
-        func: async () => {
+        target: {tabId: sender.tab.id}, world: 'MAIN', args: [status],
+        func: async requiredStatus => {
             if (!['http://127.0.0.1:18888', 'http://localhost:18888'].includes(location.origin)) return null;
             const match = /^#chrome-job=([A-Za-z0-9_-]{40,60})$/.exec(location.hash);
             if (!match) return null;
@@ -66,7 +66,7 @@ async function swExpectedFromJob(sender) {
             const jobResponse = await fetch(jobUrl, {cache:'no-store'});
             if (!jobResponse.ok) return null;
             const job = await jobResponse.json();
-            if (job.status !== 'running' || !/^(Default|Profile \d+)$/.test(job.profile || '')) return null;
+            if (job.status !== requiredStatus || !/^(Default|Profile \d+)$/.test(job.profile || '')) return null;
             const listResponse = await fetch(base + '/api/profiles', {cache:'no-store'});
             if (!listResponse.ok) return null;
             const list = await listResponse.json();
@@ -82,38 +82,85 @@ async function swExpectedFromJob(sender) {
     return expected;
 }
 
+const flowLanding = /^https:\/\/flow\.google\.com\/about\/?(?:[?#]|$)/;
+
+function swCanWaitForFlow(error) {
+    return error instanceof FlowIdentityUnavailable || /Cannot access contents of the page|showing error page/i.test(error.message);
+}
+
 async function swFindFlowAccount(expected) {
-    const active = await chrome.tabs.query({active:true, lastFocusedWindow:true, url:'https://flow.google.com/*'});
+    const active = (await chrome.tabs.query({active:true, lastFocusedWindow:true, url:'https://flow.google.com/*'}))
+        .filter(tab => !flowLanding.test(tab.url || ''));
     if (active.length === 1) {
-        let email;
         try {
-            email = swNormalizeEmail(await readFlowAccount(active[0].id));
+            const email = swNormalizeEmail(await readFlowAccount(active[0].id));
+            if (!email) throw new FlowIdentityUnavailable('当前 Flow 页面未显示有效的登录邮箱。');
+            if (expected && email !== expected) throw new Error('当前 Flow 邮箱与所选 Chrome 用户不一致，已停止采集。');
+            return email;
         } catch (error) {
-            if (/Cannot access contents of the page|showing error page/i.test(String(error.message || error))) {
-                throw new Error('当前 Flow 页面未正常加载，请打开该账号的 Flow 页面后再手动采集。');
-            }
-            throw error;
+            if (!expected || !swCanWaitForFlow(error)) throw error;
         }
-        if (expected && email !== expected) throw new Error('当前 Flow 邮箱与所选 Chrome 用户不一致，已停止采集。');
-        if (!email) throw new Error('当前 Flow 页面的邮箱无法确认，已停止采集。');
-        return email;
     }
     if (!expected) throw new Error('请先切到要同步账号的 Flow 页面，再使用插件同步。');
     const tabs = await chrome.tabs.query({url:'https://flow.google.com/*'});
     const found = new Set();
     for (const tab of tabs) {
+        if (flowLanding.test(tab.url || '')) continue;
         try {
             const email = swNormalizeEmail(await readFlowAccount(tab.id));
             if (email) found.add(email);
         } catch (error) {
             // A browser error page cannot contain a usable Flow identity.
-            if (/Cannot access contents of the page|showing error page/i.test(String(error.message || error))) continue;
+            if (swCanWaitForFlow(error)) continue;
             throw error;
         }
     }
     if (found.has(expected)) return expected;
     if (found.size) throw new Error('Flow 页面邮箱与所选 Chrome 用户不一致，已停止采集。');
-    throw new Error('所选 Chrome 用户的 Flow 页面未正常加载或未登录，已停止采集。');
+    throw new FlowIdentityUnavailable('所选 Chrome 用户的 Flow 页面尚未显示登录邮箱。');
+}
+
+async function swEnterFlowWorkspace(tabId) {
+    const [result] = await chrome.scripting.executeScript({
+        target: {tabId},
+        world: 'MAIN',
+        func: () => {
+            if (location.origin !== 'https://flow.google.com' || !/^\/about\/?$/.test(location.pathname)) return false;
+            const labels = /^(使用 Google Flow 创建|使用 Google Flow 建立|Create with (?:Google )?Flow)$/i;
+            const buttons = [...document.querySelectorAll('button')].filter(button => !button.disabled
+                && button.getClientRects().length && labels.test((button.getAttribute('aria-label') || button.innerText || '').trim()));
+            if (buttons.length !== 1) return false;
+            buttons[0].click();
+            return true;
+        },
+    });
+    return result?.result === true;
+}
+
+async function swPrepareFlowAccount(expected) {
+    try {
+        return await swFindFlowAccount(expected);
+    } catch (error) {
+        if (!swCanWaitForFlow(error)) throw error;
+    }
+    const tabs = await chrome.tabs.query({url:'https://flow.google.com/*'});
+    const target = tabs.find(tab => flowLanding.test(tab.url || ''))
+        || await chrome.tabs.create({url:'https://flow.google.com/', active:false});
+    let entered = false;
+    for (let i = 0; i < 24; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        try {
+            return await swFindFlowAccount(expected);
+        } catch (error) {
+            if (!swCanWaitForFlow(error)) throw error;
+        }
+        const tab = await chrome.tabs.get(target.id);
+        if (!entered && flowLanding.test(tab.url || '')) entered = await swEnterFlowWorkspace(tab.id);
+        if (tab.status === 'complete' && tab.url?.startsWith('https://accounts.google.com/')) {
+            throw new Error('Google 要求登录，请在这个 Windows Chrome 用户中确认 Flow 登录。');
+        }
+    }
+    throw new Error('已打开 Flow，但没有读到已登录邮箱，请查看这个 Windows Chrome 用户的 Flow 页面。');
 }
 
 async function swCheckReceipt(config, receipt) {
@@ -147,27 +194,19 @@ async function swCheckReceipt(config, receipt) {
     return {ok:true, status:'pending', message:pending};
 }
 
-async function swSync(expectedEmail = '') {
+async function swSync(expectedEmail = '', receiptOnly = false) {
     if (swSyncRunning) throw new Error('此窗口正在同步，请等待结果。');
     swSyncRunning = true;
     try {
         const config = await swNative('sw_get');
         if (!config) throw new Error('请先打开 StudioWright 后台，在「账号与项目」点击「连接本机插件」。');
         if (config.apiUrl !== 'http://127.0.0.1:18888/api/plugin/session') throw new Error('连接地址不正确，请重新连接本机插件。');
-        let email = '';
-        const pages = await chrome.tabs.query({url:'https://flow.google.com/*'});
-        if (!pages.length && expectedEmail) {
-            await chrome.tabs.create({url:'https://flow.google.com/', active:false});
-            for (let i = 0; i < 20; i++) {
-                await new Promise(resolve => setTimeout(resolve, 1500));
-                try { email = await swFindFlowAccount(expectedEmail); break; }
-                catch (error) { if (/不一致/.test(String(error.message))) throw error; }
-            }
-            if (!email) throw new Error('Flow 页面已打开，但尚未确认所选账号登录；请手动检查页面。');
-        } else {
-            email = await swFindFlowAccount(expectedEmail);
-        }
         const last = (await chrome.storage.local.get('swLast')).swLast;
+        if (receiptOnly) {
+            if (last?.status === 'pending' && last.id && last.email === expectedEmail) return await swCheckReceipt(config, last);
+            return {ok:true, status:'pending', message:'未找到可继续查询的回执，请在算力中心查看账号检查记录。'};
+        }
+        const email = expectedEmail ? await swPrepareFlowAccount(expectedEmail) : await swFindFlowAccount('');
         if (last?.status === 'pending' && last.id) {
             if (last.email !== email) return {ok:false,error:'这个 Chrome 用户还有另一账号的同步待核对，请先查看任务队列。'};
             return await swCheckReceipt(config, last);
@@ -212,13 +251,14 @@ chrome.runtime.onMessage.addListener((request, sender, respond) => {
 });
 
 chrome.runtime.onMessageExternal.addListener((request, sender, respond) => {
-    if (!['sw_pair','sw_probe','sw_sync'].includes(request?.action)) return false;
+    if (!['sw_pair','sw_probe','sw_sync','sw_refresh_import'].includes(request?.action)) return false;
     if (!/^http:\/\/(127\.0\.0\.1|localhost):18888\/(?:[?#].*)?$/.test(sender.url || '')) {
         respond({ok:false,error:'仅允许本机 StudioWright 后台连接。'});
         return false;
     }
     const promise = request.action === 'sw_probe' ? swConnectionStatus() :
         request.action === 'sw_sync' ? swExpectedFromJob(sender).then(expected => swSync(expected)) :
+        request.action === 'sw_refresh_import' ? swExpectedFromJob(sender, 'pending').then(expected => swSync(expected, true)) :
         swNative('sw_set',request.config).then(() => ({ok:true}));
     promise.then(respond).catch(error => respond({ok:false,error:error.message}));
     return true;

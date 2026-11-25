@@ -119,13 +119,13 @@ async function runChromeJob(nonce){
   help.textContent='请保持此窗口打开，直到显示导入结果。';
   const verifyUntil=Date.now()+35*60*1000;
   do {
-    const result=await pluginCommand(extensionId,{action:'sw_sync'},180000);
+    const action=checkingReceipt?'sw_refresh_import':'sw_sync';
+    const result=await pluginCommand(extensionId,{action},180000);
     const message=result.message||'Ubuntu 核对结果待确认。';
     const confirmed=result.status==='confirmed' || (!result.status && message.startsWith('Ubuntu 登录核对成功：'));
     await report(confirmed?'succeeded':'pending',message);
     showResult(message,confirmed);
     if (confirmed || result.status !== 'pending') return;
-    // The plugin retains this receipt and checks it again when it is pending.
     checkingReceipt=true;
     await pause(5000);
   } while (Date.now()<verifyUntil);

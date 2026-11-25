@@ -1,5 +1,7 @@
 // Read the account displayed by Flow. This module never reads Cookies,
 // saves credentials, calls the backend, or starts a synchronization.
+class FlowIdentityUnavailable extends Error {}
+
 async function readFlowAccount(tabId) {
     const results = await chrome.scripting.executeScript({
         target: {tabId},
@@ -22,6 +24,7 @@ async function readFlowAccount(tabId) {
         }
     });
     const emails = results[0]?.result || [];
+    if (!emails.length) throw new FlowIdentityUnavailable('当前 Flow 页面未显示登录邮箱。');
     if (emails.length !== 1) throw new Error('未能唯一识别当前 Flow 邮箱，请确认页面已登录；也可以手动填写。');
     const email = String(emails[0]).trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Flow 返回的邮箱格式无效。');
