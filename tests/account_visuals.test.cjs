@@ -12,6 +12,26 @@ function load(name, context) {
   vm.runInContext(match[0], context);
 }
 
+test('automatic Gemini chats only offer models with an eligible account', () => {
+  const flash = {id:'gemini-3.8-flash-medium', family:'gemini-3.8-flash', effort:'medium'};
+  const hydrogen = {id:'gemini-4-hydrogen-medium', family:'gemini-4-hydrogen', effort:'medium'};
+  const neon = {id:'gemini-4-neon-high', family:'gemini-4-neon', effort:'high'};
+  const accounts = [
+    {key:'flow-account-ready', auto:true, gemini_model_options:[flash, hydrogen]},
+    {key:'flow-account-duplicate', auto:true, gemini_model_options:[hydrogen]},
+    {key:'flow-account-paused', auto:false, gemini_model_options:[neon]},
+    {key:'flow-account-limited', auto:true, restriction:'quota_exhausted', gemini_model_options:[neon]}
+  ];
+  const context = vm.createContext({accounts, flashChatChoices:[flash],
+    geminiAccountAvailability: item => ({auto:item.auto}),
+    officialAccount: item => ({data:{advanced_quota_restriction:item.restriction}})});
+  load('geminiChatModelChoices', context);
+  const options = key => JSON.stringify(vm.runInContext(`geminiChatModelChoices('${key}', accounts).map(option => option.id)`, context));
+  assert.equal(options('auto'), JSON.stringify([flash.id, hydrogen.id]));
+  assert.equal(options('ready'), JSON.stringify([flash.id, hydrogen.id]));
+  assert.equal(options('limited'), JSON.stringify([flash.id]));
+});
+
 test('overview distribution applies segment widths through the browser style API', () => {
   let segments = [];
   const target = {

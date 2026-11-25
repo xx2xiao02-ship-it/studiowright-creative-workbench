@@ -129,6 +129,8 @@ Invoke-RestMethod 'http://127.0.0.1:18922/health'
 
 1. 在 Ubuntu 安装 [Google Antigravity 官方 CLI](https://antigravity.google/docs/cli/install/)。管理员核实实际 `agy` 文件的绝对路径。每个账号使用独立运行目录，目录包含 `home/` 和 `workspace/`。
 2. 在状态目录维护 `official-runtime.json`，权限设为仅服务用户可读写。配置包含 `schema_version`、`enabled`、`binary`、`model`、`accounts`。`accounts` 以工作台登记的 Flow `profile` 的 SHA-256 值为键。配置值至少包含实际授权 `email` 和该账号独立的绝对 `root`。
+
+   该账号用 CLI 实测获得完整文字回复后，在它的 `advanced_text_models` 中登记验证过的完整型号，例如 `gemini-4-hydrogen-medium`。CLI 的模型列表也可能显示通用模型，因此开通以已授权的实际调用为准。此配置放在主机私有状态目录，供工作台动态读取。
 3. 在每个账号的 `home/.gemini/antigravity-cli/settings.json` 保留运行时代码要求的工具权限限制。源码参见 [`official_runtime.py`](../packaging/ubuntu/snapshot/workbench/official_runtime.py)。账号高级模型只登记官方实际开放的型号。
 4. 保持 Ubuntu 桌面登录，并先让该账号的 Flow 固定任务页就绪。在总览点击「Gemini 一键就绪」，由本人在 Ubuntu 上对应账号的 Chrome 窗口完成官方授权。复查云端回应和额度。流程见 [Gemini 一键就绪](Gemini-readiness.md)。
 

@@ -3211,9 +3211,12 @@ $("geminiSend").addEventListener("click", async () => {
     }
     $("geminiMessage").textContent = "正在提交真实请求，请不要重复发送。";
     chatStarted = true;
+    const body = {method: "gemini.chat", account, prompt, attachments};
+    if (!attachments.length && geminiChatModelChoices(account, state.snapshot?.real_accounts?.items || [])
+      .some(option => option.id === hydrogenMedium)) body.model = hydrogenMedium;
     const response = await fetch("/api/real-pool/chat", {method: "POST", credentials: "same-origin",
       headers: {"Content-Type": "application/json", "X-Workbench-Request": "1", "Idempotency-Key": id},
-      body: JSON.stringify({method: "gemini.chat", account, prompt, attachments})});
+      body: JSON.stringify(body)});
     const record = await response.json();
     if (response.status === 400 || response.status === 403) {
       sessionStorage.removeItem("geminiRequest");
@@ -3482,9 +3485,29 @@ async function loadConversations({background = false, listData = null} = {}) {
 
 const chatEffortLabels={low:'低',medium:'中',high:'高',xhigh:'超高'};
 const flashModel='gemini-3.8-flash';
+const hydrogenModel='gemini-4-hydrogen';
+const hydrogenMedium=hydrogenModel+'-medium';
+let chatPreferredModel='';
 const flashChatChoices=['low','medium','high'].map(effort=>({
   id:`${flashModel}-${effort}`, family:flashModel, label:'Gemini 3.8 Flash', effort
 }));
+
+function geminiChatModelChoices(accountKey, accounts) {
+  if (accountKey !== 'auto') {
+    const item = accounts.find(row => row.key === 'flow-account-' + accountKey);
+    if (!item || officialAccount(item).data?.advanced_quota_restriction) return flashChatChoices;
+    const choices = item.gemini_model_options?.filter(option => option.family && option.effort);
+    return choices?.length ? choices : flashChatChoices;
+  }
+  const choices = new Map(flashChatChoices.map(option => [option.id, option]));
+  for (const item of accounts) {
+    if (!geminiAccountAvailability(item).auto || officialAccount(item).data?.advanced_quota_restriction) continue;
+    for (const option of item.gemini_model_options || []) {
+      if (option.family && option.effort) choices.set(option.id, option);
+    }
+  }
+  return [...choices.values()];
+}
 
 function syncConversationControls(announce = false) {
   const item=currentConversation, ready=!channelReadFailed && state.channelStatus?.production_send_available === true;
@@ -3505,10 +3528,8 @@ function syncConversationControls(announce = false) {
   $('chatFiles').disabled=true;
   $('chatFiles').title='当前接入文字对话；已有附件和草稿保留。';
   const modelSelect=$('chatModel'), effortSelect=$('chatEffort');
-  const previousModel=modelSelect.value, previousEffort=effortSelect.value;
-  const account=accounts.find(row=>row.key==='flow-account-'+select.value);
-  const accountChoices=account?.gemini_model_options?.filter(option=>option.family && option.effort);
-  let choices=accountChoices?.length ? accountChoices : flashChatChoices;
+  const previousEffort=effortSelect.value;
+  let choices=geminiChatModelChoices(select.value, accounts);
   if(item?.model && (archived || item.account_key)) {
     const saved=choices.find(option=>option.id===item.model);
     const [,family,effort]=item.model.match(/^(.*)-(low|medium|high|xhigh)$/) || [];
@@ -3517,10 +3538,11 @@ function syncConversationControls(announce = false) {
   }
   const families=new Map(choices.map(option=>[option.family,option.label]));
   modelSelect.replaceChildren(...Array.from(families, ([family,label])=>new Option(label,family)));
-  if(families.has(previousModel)) modelSelect.value=previousModel;
+  if(families.has(chatPreferredModel)) modelSelect.value=chatPreferredModel;
+  else if(choices.some(option=>option.id===hydrogenMedium)) modelSelect.value=hydrogenModel;
   const levels=choices.filter(option=>option.family===modelSelect.value);
   effortSelect.replaceChildren(...levels.map(option=>new Option(chatEffortLabels[option.effort] || '原设置',option.id)));
-  const defaultEffort=modelSelect.value===flashModel ? 'medium' : 'high';
+  const defaultEffort=modelSelect.value===flashModel || modelSelect.value===hydrogenModel ? 'medium' : 'high';
   effortSelect.value=levels.find(option=>option.id===previousEffort)?.id
     || levels.find(option=>option.id===item?.model)?.id
     || levels.find(option=>option.effort===defaultEffort)?.id
@@ -3639,6 +3661,7 @@ async function showConversation(id, {background = false} = {}) {
   const focusedPrompt = sameConversation && history.contains(document.activeElement)
     ? document.activeElement.closest('details[data-chat-prompt-turn]')?.dataset.chatPromptTurn : undefined;
   if (!sameConversation) {
+    chatPreferredModel = '';
     $('chatModel').value = '';
     $('chatEffort').value = '';
     if (!item.account_key && [...$('chatAccount').options].some((option) => option.value === 'auto')) $('chatAccount').value = 'auto';
@@ -3733,7 +3756,10 @@ $('chatNew').addEventListener('click', async () => {
   } finally { button.disabled = false; button.textContent = '新建对话'; }
 });
 $('chatAccount').addEventListener('change', () => syncConversationControls(true));
-$('chatModel').addEventListener('change', () => syncConversationControls());
+$('chatModel').addEventListener('change', () => {
+  chatPreferredModel = $('chatModel').value;
+  syncConversationControls();
+});
 $('chatShowHidden').addEventListener('click', async () => {
   showingHiddenConversations = !showingHiddenConversations;
   $('chatShowHidden').textContent = showingHiddenConversations ? '查看当前对话' : '查看已隐藏';

@@ -61,14 +61,16 @@ def call(path, payload=None, request_id=None, *, file=None):
 
 ## Gemini · 对话与推理
 
-可选参数 `effort` 适用于文字对话和识图（含只校验接口）。当前模型 Gemini 3.8 Flash 经线上 CLI 列表核实支持 `low`（低）、`medium`（中）、`high`（高），分别使用对应后缀的模型 ID。不传、null、空字符串或任何不支持的值/类型都回退 `medium`，不会因等级值报错。每轮请求单独选择；本轮未传仍使用中等，不继承上一轮的高等级。自动重试沿用原请求等级，不换等级。请求详情 `model` 回显实际选择；同一请求编号变更有效等级会产生参数冲突，应为新一轮使用新编号。
+可选参数 `effort` 适用于文字对话和识图（含只校验接口）。使用 Gemini 3.8 Flash 时，支持 `low`（低）、`medium`（中）、`high`（高），分别使用对应后缀的模型 ID。省略、传 `null`、空字符串或无效值时使用 `medium`。每轮请求单独选择，自动重试沿用原请求等级。请求详情 `model` 回显实际选择。同一请求编号变更有效等级会产生参数冲突，新一轮应使用新编号。
 
-文字示例：
+新建工作台对话优先选择已开通的 Hydrogen（中）。API 调用可显式选择 Hydrogen，续聊沿用首轮账号和模型系列。
+
+文字对话示例
 ```python
-chat = call("/api/conversations", {"title": "高思考等级示例"})
+chat = call("/api/conversations", {"title": "Hydrogen 对话示例"})
 print(call("/api/real-pool/chat", {
     "conversation_id": chat["id"], "account": "auto",
-    "prompt": "请分析这个方案的优缺点。", "effort": "high"
+    "prompt": "请分析这个方案的优缺点。", "model": "gemini-4-hydrogen-medium"
 }, str(uuid4())))
 ```
 识图时在原请求体加入 `"effort": "low"` 或 `"effort": "high"` 即可；上传方式保持不变。省略该字段使用中等。只校验接口也接受该字段，并按同样规则回退。
