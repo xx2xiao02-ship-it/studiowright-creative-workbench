@@ -63,7 +63,7 @@ def call(path, payload=None, request_id=None, *, file=None):
 
 可选参数 `effort` 适用于文字对话和识图（含只校验接口）。使用 Gemini 3.8 Flash 时，支持 `low`（低）、`medium`（中）、`high`（高），分别使用对应后缀的模型 ID。省略、传 `null`、空字符串或无效值时使用 `medium`。每轮请求单独选择，自动重试沿用原请求等级。请求详情 `model` 回显实际选择。同一请求编号变更有效等级会产生参数冲突，新一轮应使用新编号。
 
-新建工作台对话优先选择已开通的 Hydrogen（中）。API 调用可显式选择 Hydrogen，续聊沿用首轮账号和模型系列。
+已开通 Hydrogen 中档的部署中，新建文字对话与 API 未传 `model` 时默认使用 `gemini-4-hydrogen-medium`。续聊未传 `model` 时沿用已保存的模型，仍可通过 `effort` 调整同系列的思考等级。显式传入 `model` 时使用指定型号。普通识图沿用它的独立模型设置。
 
 文字对话示例
 ```python
@@ -121,7 +121,7 @@ print(submission["model"], submission["fallback"])
 # 后续用 call(f"/api/real-pool/requests/{rid}") 查询最终型号和回复。
 ```
 
-**账号与额度监控**可在工作台「总览 → Gemini 各账号额度」查看。工作台本机面板端口 `18920` 的 `GET /api/channel-status` 返回 `dispatch.advanced_pool`，`GET /api/official-quota` 返回各高级账号的 5 小时及每周剩余与恢复时间。`advanced_pool.quota_scope` 为 `gemini_models_shared`，表示 Hydrogen 与 Neon 共用同一个 Gemini Models 额度池。`advanced_pool.windows.*.total_remaining_percent` 是可读账号剩余百分比的合计，`average_remaining_percent` 是账号平均剩余，不代表供应商公布的绝对积分。两个监控接口由面板提供，程序调用端口 `18922` 提供对话提交及结果查询。额度按账号共享，可读的高级账号每 5 分钟刷新。
+**账号与额度监控**可在工作台「操作台 → HY 默认池额度」查看。总览只统计已开通 Hydrogen 中档的账号，对每个窗口的近期已读剩余比例取平均。工作台本机面板端口 `18920` 的 `GET /api/channel-status` 返回默认文字模型 `dispatch.model` 与 `dispatch.advanced_pool`。`GET /api/official-quota` 返回各账号的 5 小时和每周剩余与恢复时间。`advanced_pool.quota_scope` 为 `gemini_models_shared`，表示这些数值来自各账号的官方 Gemini Models 共享额度。`advanced_pool.windows.*.total_remaining_percent` 是可读账号剩余百分比的合计，`average_remaining_percent` 是账号平均剩余。两个监控接口由面板提供，程序调用端口 `18922` 提供对话提交及结果查询。可读的高级账号每 5 分钟刷新。
 
 接着问时沿用 `conversation_id`，为新消息生成新的请求编号。原账号受限时续聊暂缓。自动分配的新请求仅在确认还未发送时允许切换账号。查回复用下方「结果与下载」中的 Gemini 查询接口。
 

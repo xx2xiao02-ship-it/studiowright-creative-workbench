@@ -4,6 +4,7 @@ DEFAULT=MODELS['medium']
 FLASH_FAMILY='gemini-3.8-flash'
 NEON_FAMILY='gemini-4-neon'
 HYDROGEN_FAMILY='gemini-4-hydrogen'
+DEFAULT_TEXT_MODEL=HYDROGEN_FAMILY+'-medium'
 THOUGHT_LEVELS=('low','medium','high','xhigh')
 ADVANCED_FAMILIES={NEON_FAMILY:'Gemini 4 Neon',HYDROGEN_FAMILY:'Gemini 4 Hydrogen'}
 ADVANCED_MODELS={f'{family}-{level}' for family in ADVANCED_FAMILIES for level in THOUGHT_LEVELS}

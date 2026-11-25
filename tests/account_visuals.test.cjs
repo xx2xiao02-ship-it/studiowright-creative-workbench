@@ -186,7 +186,7 @@ test('Flow card gives one direct next step for a missing binding or stale balanc
   assert.notEqual(vm.runInContext("flowAccountReason(account,{},row,'binding').showOnCard",context),true);
 });
 
-test('overview renders one shared quota card with both time windows', () => {
+test('overview only averages the fresh shared quotas of the default HY pool', () => {
   const now = 1800000000;
   const flow = {};
   const shared = {};
@@ -201,6 +201,7 @@ test('overview renders one shared quota card with both time windows', () => {
     $: id => ({geminiQuotaOverview:target, flowSuccessOverview:flow, geminiSharedQuota:shared, geminiQuotaBreakdown:breakdown})[id],
     document: {},
     state: {},
+    hydrogenMedium: 'gemini-4-hydrogen-medium',
     Date: {now: () => now * 1000},
     officialQuotaReadFailed: false,
     officialQuotaRequest: null,
@@ -208,11 +209,11 @@ test('overview renders one shared quota card with both time windows', () => {
       advanced_pool: {
         total_accounts: 3,
         accounts: {
-          first: {status:'ok', checked_at:now-30, models:['gemini-4-hydrogen','gemini-4-neon'],
+          first: {status:'ok', checked_at:now-30, models:['gemini-4-hydrogen-medium','gemini-4-neon-high'],
             five_hour:{remaining_percent:100}, weekly:{remaining_percent:60}},
-          second: {status:'ok', checked_at:now-60, models:['gemini-4-neon'],
+          second: {status:'ok', checked_at:now-60, models:['gemini-4-neon-high'],
             five_hour:{remaining_percent:75}},
-          stale: {status:'ok', checked_at:now-601, models:['gemini-4-hydrogen'],
+          stale: {status:'ok', checked_at:now-601, models:['gemini-4-hydrogen-medium'],
             five_hour:{remaining_percent:0}, weekly:{remaining_percent:100}}
         }
       }
@@ -222,10 +223,10 @@ test('overview renders one shared quota card with both time windows', () => {
   vm.runInContext('renderOfficialQuota()', context);
   assert.match(flow.innerHTML, /FLOW · 图片 \/ 视频成功率/);
   assert.equal((shared.innerHTML.match(/class="quota-shared-card"/g) || []).length, 1);
-  assert.match(shared.innerHTML, /Hydrogen \/ Neon 共用/);
-  assert.match(shared.innerHTML, /5 小时额度<\/span><strong>87\.50%[^]*?aria-valuenow="87\.5"[^]*?>2 \/ 3 个账号已读/);
-  assert.match(shared.innerHTML, /每周额度<\/span><strong>60%[^]*?aria-valuenow="60"[^]*?>1 \/ 3 个账号已读/);
-  assert.doesNotMatch(shared.innerHTML, /175%|120%/);
+  assert.match(shared.innerHTML, /HY 默认池额度[^]*?Gemini Models 共享/);
+  assert.match(shared.innerHTML, /5 小时额度<\/span><strong>100%[^]*?aria-valuenow="100"[^]*?>1 \/ 2 个账号已读/);
+  assert.match(shared.innerHTML, /每周额度<\/span><strong>60%[^]*?aria-valuenow="60"[^]*?>1 \/ 2 个账号已读/);
+  assert.doesNotMatch(shared.innerHTML, /87\.50%|175%|120%/);
   assert.match(breakdown.innerHTML, /账号与普通 Gemini 额度明细/);
 });
 

@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace as S
 from unittest.mock import Mock,patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'packaging/ubuntu/snapshot/workbench'))
-from gemini_effort import resolve,DEFAULT,NEON_FAMILY,HYDROGEN_FAMILY,THOUGHT_LEVELS,text_model_options
+from gemini_effort import resolve,DEFAULT,DEFAULT_TEXT_MODEL,NEON_FAMILY,HYDROGEN_FAMILY,THOUGHT_LEVELS,text_model_options
 from official_runtime import OfficialRuntime
 from official_pool import OfficialPool
 from live_pool import RealPool
@@ -103,6 +103,49 @@ class Effort(unittest.TestCase):
             result,_=continue_chat()
             self.assertEqual(result['account_key'],first)
             self.assertEqual(result['model'],NEON_FAMILY+'-low')
+
+    @unittest.skipUnless(os.name=='posix','Workbench account pool requires Linux')
+    @patch('official_pool.reader_for')
+    def test_default_hydrogen_is_quota_aware_and_replay_keeps_original_request(self,reader_for):
+        standard, hydrogen = ('a'*64, 'b'*64)
+        models = {hydrogen: {DEFAULT_TEXT_MODEL}}
+        quotas = {}
+        reader_for.return_value.cached_accounts.side_effect = lambda keys: {k:quotas.get(k,{}) for k in keys}
+        with fixture_directory() as directory, closing(RealPool(directory,directory)) as pool:
+            official=pool.official
+            official.runtime=S(inventory=lambda:{standard:True,hydrogen:True},text_models=lambda:models)
+            items=[{'key':'flow-account-'+key} for key in (standard,hydrogen)]
+            rid=str(uuid.uuid4())
+            result,_=official.generate('auto','default',rid,items)
+            self.assertEqual((result['model'],result['account_key']),(DEFAULT_TEXT_MODEL,hydrogen))
+            quotas[hydrogen]={'status':'ok','checked_at':time.time(),'weekly':{'remaining_percent':0}}
+            self.assertFalse(official.generate('auto','default',rid,items)[1])
+            with self.assertRaises(DispatchBusy):
+                official.generate('auto','quota depleted',str(uuid.uuid4()),items)
+            flash,_=official.generate('auto','explicit flash',str(uuid.uuid4()),items,model=DEFAULT)
+            self.assertEqual(flash['model'],DEFAULT)
+
+    @unittest.skipUnless(os.name=='posix','Workbench account pool requires Linux')
+    @patch('official_pool.reader_for')
+    def test_legacy_flash_replay_and_follow_up_keep_the_pinned_model(self,reader_for):
+        key='a'*64
+        reader_for.return_value.cached_accounts.return_value={}
+        with fixture_directory() as directory, closing(RealPool(directory,directory)) as pool:
+            official=pool.official
+            official.runtime=S(inventory=lambda:{key:True},text_models=lambda:{key:{DEFAULT_TEXT_MODEL}})
+            items=[{'key':'flow-account-'+key}]
+            rid=str(uuid.uuid4())
+            result,_=official.generate('auto','legacy prompt',rid,items,model=DEFAULT)
+            replay,created=official.generate('auto','legacy prompt',rid,items)
+            self.assertFalse(created)
+            self.assertEqual(replay['model'],DEFAULT)
+            conversation=result['conversation_id']
+            saved={'channel':'official_antigravity_cli','model':DEFAULT,'official_conversation_id':str(uuid.uuid4())}
+            with pool.connection() as db:
+                db.execute("UPDATE requests SET status='completed' WHERE request_id=?",(rid,))
+                db.execute('UPDATE conversations SET native_json=? WHERE id=?',(json.dumps(saved),conversation))
+            follow_up,_=official.generate('auto','follow up',str(uuid.uuid4()),items,conversation_id=conversation)
+            self.assertEqual((follow_up['model'],follow_up['account_key']),(DEFAULT,key))
 
     def test_capacity_retry_keeps_level(self):
         p=OfficialPool.__new__(OfficialPool);p.pool=S(state_dir=Path('/unused'))

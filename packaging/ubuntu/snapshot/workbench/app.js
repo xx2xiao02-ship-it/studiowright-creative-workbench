@@ -3211,12 +3211,9 @@ $("geminiSend").addEventListener("click", async () => {
     }
     $("geminiMessage").textContent = "正在提交真实请求，请不要重复发送。";
     chatStarted = true;
-    const body = {method: "gemini.chat", account, prompt, attachments};
-    if (!attachments.length && geminiChatModelChoices(account, state.snapshot?.real_accounts?.items || [])
-      .some(option => option.id === hydrogenMedium)) body.model = hydrogenMedium;
     const response = await fetch("/api/real-pool/chat", {method: "POST", credentials: "same-origin",
       headers: {"Content-Type": "application/json", "X-Workbench-Request": "1", "Idempotency-Key": id},
-      body: JSON.stringify(body)});
+      body: JSON.stringify({method: "gemini.chat", account, prompt, attachments})});
     const record = await response.json();
     if (response.status === 400 || response.status === 403) {
       sessionStorage.removeItem("geminiRequest");
@@ -3530,6 +3527,10 @@ function syncConversationControls(announce = false) {
   const modelSelect=$('chatModel'), effortSelect=$('chatEffort');
   const previousEffort=effortSelect.value;
   let choices=geminiChatModelChoices(select.value, accounts);
+  const hydrogenUnavailable = !!item && !item.account_key && state.channelStatus?.dispatch?.model === hydrogenMedium
+    && !choices.some(option => option.id === hydrogenMedium);
+  if (hydrogenUnavailable) choices = [...choices,
+    {id:hydrogenMedium, family:hydrogenModel, label:'Gemini 4 Hydrogen', effort:'medium'}];
   if(item?.model && (archived || item.account_key)) {
     const saved=choices.find(option=>option.id===item.model);
     const [,family,effort]=item.model.match(/^(.*)-(low|medium|high|xhigh)$/) || [];
@@ -3550,8 +3551,9 @@ function syncConversationControls(announce = false) {
   const locked=!ready || !item || archived || pending || chatSending || !!item.hidden;
   modelSelect.disabled=locked || !!item?.account_key || families.size<2;
   effortSelect.disabled=locked || levels.length<2;
-  $('chatModelNote').textContent=imageAnalysis ? 'API 识图记录 · 每次识图独立提问。' : archived ? '历史归档只读；原问答与草稿保留，请新建官方对话。' : '首次发送后固定账号和模型。续聊时可调整思考等级。';
-  $('chatSend').disabled=!ready || !item || archived || pending || chatSending || !!item.hidden || !geminiSelectionReady(select.value);
+  const blockedByHydrogen = hydrogenUnavailable && modelSelect.value === hydrogenModel;
+  $('chatModelNote').textContent=imageAnalysis ? 'API 识图记录 · 每次识图独立提问。' : archived ? '历史归档只读；原问答与草稿保留，请新建官方对话。' : blockedByHydrogen ? '当前没有可派发的 HY 中档账号，请核对授权和额度，或手动选择其他模型。' : '首次发送后固定账号和模型。续聊时可调整思考等级。';
+  $('chatSend').disabled=!ready || !item || archived || pending || chatSending || !!item.hidden || blockedByHydrogen || !geminiSelectionReady(select.value);
   if(announce && !chatSending) $('chatMessage').textContent=!item ? '请选择或新建对话。' : imageAnalysis ? (pending ? '正在处理识图请求，请等待结果。' : '继续传图请使用 API 文档里的 Gemini 识图接口。') : archived ? '历史记录保留；请新建对话使用官方通道。' : pending ? '任务正在排队或处理；可在原消息下查看处理和重试进度。' : !ready ? '官方调用暂不可用，草稿保留。' : '';
 }
 
@@ -5201,10 +5203,10 @@ function renderOfficialQuota() {
   const advanced = data?.advanced_pool;
   const advancedDispatch = state.channelStatus?.dispatch?.advanced_pool;
   const advancedRows = Object.entries(advanced?.accounts || {});
-  const advancedTotal = advanced?.total_accounts ?? advancedRows.length;
+  const hydrogenRows = advancedRows.filter(([,row]) => row.models?.includes(hydrogenMedium));
   const now = Date.now()/1000;
   const sharedWindowMarkup = ['five_hour','weekly'].map(window=>{
-    const values = advancedRows
+    const values = hydrogenRows
       .filter(([,row])=>now-row.checked_at >= 0 && now-row.checked_at <= 600)
       .map(([,row])=>savedQuotaValue(row,window))
       .filter(value=>value!==null);
@@ -5212,9 +5214,9 @@ function renderOfficialQuota() {
     const title = window === 'five_hour' ? '5 小时' : '每周';
     const meter = average === null ? `role="img" aria-label="${title}额度待读取"`
       : `role="progressbar" aria-label="${title}平均剩余额度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${average}"`;
-    return `<div class="quota-shared-window"><span>${title}额度</span><strong>${average === null ? '待读取' : number(average)}${average === null ? '' : '<small>平均剩余</small>'}</strong><div class="quota-track${average === null ? ' is-unknown' : ''}" ${meter}><i data-quota-fill="${average ?? 0}"></i></div><em>${values.length} / ${advancedTotal} 个账号已读</em></div>`;
+    return `<div class="quota-shared-window"><span>${title}额度</span><strong>${average === null ? '待读取' : number(average)}${average === null ? '' : '<small>平均剩余</small>'}</strong><div class="quota-track${average === null ? ' is-unknown' : ''}" ${meter}><i data-quota-fill="${average ?? 0}"></i></div><em>${values.length} / ${hydrogenRows.length} 个账号已读</em></div>`;
   }).join('');
-  const sharedTopMarkup = advanced ? `<article class="quota-shared-card"><div class="quota-shared-heading"><strong>Gemini 总账池额度</strong><span>Hydrogen / Neon 共用</span></div><div class="quota-shared-windows">${sharedWindowMarkup}</div><p>每个时间窗口按已读账号的剩余比例取平均。</p></article>` : '';
+  const sharedTopMarkup = advanced ? `<article class="quota-shared-card"><div class="quota-shared-heading"><strong>HY 默认池额度</strong><span>Gemini Models 共享</span></div><div class="quota-shared-windows">${sharedWindowMarkup}</div><p>按已开通 HY 中档且近期读到额度的账号取平均。</p></article>` : '';
   const advancedQuotaMarkup = advancedRows.length ? `
     <div class="quota-table-wrap">
       <table aria-label="高级模型账号额度">
@@ -5234,7 +5236,7 @@ function renderOfficialQuota() {
   const coverage = refreshing ? `正在读取 ${known} / ${total} 个账号` : known ? `已保存 ${known} / ${total} 个账号${known<total ? ' · 汇总仅含已读账号' : ''}` : '额度暂未获取';
   target.setAttribute('aria-busy',String(refreshing));
   $('geminiSharedQuota').innerHTML = sharedTopMarkup;
-  $('geminiQuotaBreakdown').innerHTML = `<div class="quota-footer"><div class="quota-source"><span>Gemini Models：${esc(coverage)}${checked.length ? ` · 更新于 ${esc(dateTime(Math.max(...checked)))}` : ''}</span><span>上方显示 Hydrogen 与 Neon 共用的 Gemini 总账池额度，账号明细和普通 Gemini 额度请展开查看。</span></div><button type="button" class="quota-refresh" data-quota-action="refresh" ${refreshing || officialQuotaRequest ? 'disabled' : ''}>${refreshing ? '额度读取中…' : '刷新 Gemini 额度'}</button></div><details class="quota-details" ${opened ? 'open' : ''}><summary data-quota-action="details">账号与普通 Gemini 额度明细<span>查看账号剩余与恢复时间</span></summary>${advancedQuotaMarkup}<div class="quota-table-wrap"><table><thead><tr><th>账号</th><th>5 小时剩余</th><th>每周剩余</th><th>状态 / 最近恢复</th></tr></thead><tbody>${rowMarkup || `<tr><td colspan="4">${refreshing ? '正在读取额度…' : '额度暂未获取'}</td></tr>`}</tbody></table></div></details>`;
+  $('geminiQuotaBreakdown').innerHTML = `<div class="quota-footer"><div class="quota-source"><span>Gemini Models：${esc(coverage)}${checked.length ? ` · 更新于 ${esc(dateTime(Math.max(...checked)))}` : ''}</span></div><button type="button" class="quota-refresh" data-quota-action="refresh" ${refreshing || officialQuotaRequest ? 'disabled' : ''}>${refreshing ? '额度读取中…' : '刷新 Gemini 额度'}</button></div><details class="quota-details" ${opened ? 'open' : ''}><summary data-quota-action="details">账号与普通 Gemini 额度明细<span>查看账号剩余与恢复时间</span></summary>${advancedQuotaMarkup}<div class="quota-table-wrap"><table><thead><tr><th>账号</th><th>5 小时剩余</th><th>每周剩余</th><th>状态 / 最近恢复</th></tr></thead><tbody>${rowMarkup || `<tr><td colspan="4">${refreshing ? '正在读取额度…' : '额度暂未获取'}</td></tr>`}</tbody></table></div></details>`;
   target.querySelectorAll('[data-quota-fill]').forEach(meter=>{meter.style.width=Number(meter.dataset.quotaFill)+'%';});
   target.querySelector('[data-quota-action="refresh"]').addEventListener('click',()=>refreshOfficialQuota(true));
   if (focused) target.querySelector(`[data-quota-action="${focused}"]`)?.focus({preventScroll:true});
