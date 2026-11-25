@@ -5,13 +5,18 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 
 const extension = resolve(__dirname, '../packaging/windows/client-payload/extension');
+const manifest = JSON.parse(readFileSync(resolve(extension, 'manifest.json'), 'utf8'));
 const expected = 'account@example.test';
 
 function fixture(pages, activeId, receipt = null, openedPage = {}) {
     const stats = {opened: 0, clicks: 0, cookieReads: 0, tabReads: 0};
     const realm = createContext({URL, setTimeout: run => run()});
     realm.chrome = {
-        runtime: {onMessage: {addListener() {}}, onMessageExternal: {addListener() {}}},
+        runtime: {
+            getManifest: () => ({version: '9.9.9'}),
+            onMessage: {addListener() {}},
+            onMessageExternal: {addListener() {}},
+        },
         storage: {local: {async get() { return {swLast: receipt}; }}},
         cookies: {async getAll() { stats.cookieReads++; throw new Error('unexpected collection'); }},
         tabs: {
@@ -46,11 +51,19 @@ function fixture(pages, activeId, receipt = null, openedPage = {}) {
             },
         },
     };
-    for (const name of ['account-identification.js', 'studiowright-bridge.js']) {
-        runInContext(readFileSync(resolve(extension, name), 'utf8'), realm);
-    }
+    const load = name => runInContext(readFileSync(resolve(extension, name), 'utf8'), realm);
+    realm.importScripts = (...names) => names.forEach(load);
+    load(manifest.background.service_worker);
     return {stats, run: code => runInContext(code, realm)};
 }
+
+test('connection check reports the executing sync code even when the manifest reports another version', async () => {
+    const {run} = fixture([], null);
+    const probe = await run(`swNative = async () => ({apiUrl:'http://127.0.0.1:18888/api/plugin/session'});
+        swConnectionStatus();`);
+    assert.equal(probe.version, manifest.version);
+    assert.equal(probe.connected, true);
+});
 
 test('sync enters the Flow workspace from its public landing page once', async () => {
     const {stats, run} = fixture([{id: 1, url: 'https://flow.google.com/about', status: 'complete'}], 1);

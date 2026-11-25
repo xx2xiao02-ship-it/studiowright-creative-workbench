@@ -1,4 +1,5 @@
 /* StudioWright manual bridge; independent of the legacy Flow2API endpoint. */
+const FLOW_SYNC_VERSION = '1.1.4';
 let swSyncRunning = false;
 
 async function swNative(action, config) {
@@ -8,7 +9,7 @@ async function swNative(action, config) {
 }
 
 async function swConnectionStatus() {
-    const version = chrome.runtime.getManifest().version;
+    const version = FLOW_SYNC_VERSION;
     try {
         const config = await swNative('sw_get');
         return {ok:true, version, nativeReady:true,

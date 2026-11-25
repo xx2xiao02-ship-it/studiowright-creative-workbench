@@ -1,4 +1,4 @@
-// Read the account displayed by Flow. This module never reads Cookies,
+// Read the account displayed by Flow. This module never reads cookies,
 // saves credentials, calls the backend, or starts a synchronization.
 class FlowIdentityUnavailable extends Error {}
 class FlowIdentityAmbiguous extends FlowIdentityUnavailable {}
