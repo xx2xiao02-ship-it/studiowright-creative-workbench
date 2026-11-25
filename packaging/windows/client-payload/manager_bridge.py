@@ -25,7 +25,7 @@ def selected_bridge():
             info = json.load(response)
         if info.get('application') != 'studiowright-console':
             raise ValueError()
-            return info.get('bridge_id'), info.get('bridge_check') is True
+        return info.get('bridge_id'), info.get('bridge_check') is True
     except HTTPError as error:
         try:
             value = json.load(error)
