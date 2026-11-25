@@ -425,7 +425,31 @@ print(call("/api/real-pool/chat", {
 # 后续用 call(f"/api/real-pool/requests/{rid}") 查询最终型号和回复。</code></pre>
             </section>
             <section class="api-panel" aria-labelledby="api-model-guide">
-              <div class="api-heading"><h2 id="api-model-guide" tabindex="-1">Gemini · 模型使用推荐</h2><p>算力中心默认使用 HY（Gemini 4 Hydrogen）中档。高频、可快速核对的任务先试低档，综合理解用中档，关键判断和返工成本高的任务用 Neon 高档。最高档（xhigh）只用于高档做不稳、且值得复核的少数任务。</p></div>
+              <div class="api-heading"><h2 id="api-model-guide" tabindex="-1">Gemini · 模型使用推荐</h2><p>3.8 Flash 可以用来做新闻简报和批量整理，HY 负责长期日常用量。复杂编导和高返工成本的判断由 Neon 承担，Carbon 用于长材料和疑难事项复核。</p></div>
+              <h3>3.8 Flash · 哪些活可以交给它</h3>
+              <div class="api-table-wrap"><table class="api-table">
+                <thead><tr><th scope="col">适合的场景</th><th scope="col">思考档位</th><th scope="col">实际怎么用</th></tr></thead>
+                <tbody>
+                  <tr><td>搜新闻和公告、标题去重、短摘要</td><td>低档 <code>low</code></td><td>先用实时搜索取回来源。让 Flash 汇总重点并保留标题、发布时间和原文链接。</td></tr>
+                  <tr><td>固定字段提取、短文翻译、改标题、素材粗标签</td><td>低档 <code>low</code></td><td>有明确的输入和输出格式时用低档。图片或已抽好的视频帧可做主体、场景、风格初筛。</td></tr>
+                  <tr><td>几条报道合成简报、按多条格式要求改稿、对照几张截图</td><td>中档 <code>medium</code></td><td>当低档漏字段或漏掉素材差异时升中档。让它给出对应原文或图号，方便复核。</td></tr>
+                  <tr><td>沿用原 Flash 对话做较复杂整理、对照旧工作流输出</td><td>高档 <code>high</code></td><td>适合保持旧项目的口径，或与 HY 做同题对测。要查多来源矛盾、做长材料分析时，按 HY、Neon 或 Carbon 的档位选用。</td></tr>
+                </tbody>
+              </table></div>
+              <p>目前可在官方 CLI 仍列出 3.8 Flash 时直接选用。算力中心 API 新对话提交旧 Flash 型号会先尝试同档 HY，Flash 可用时可做发送前保底。按 Google 公告，Antigravity 计划于 2026 年 11 月 30 日移除 3.8 Flash。另接官方付费 API 时，Flash 的促销单价到 12 月 31 日是 HY 的一半，2027 年起两者标准单价相同。</p>
+              <h3>HY（Hydrogen）· 哪些活值得用它</h3>
+              <div class="api-table-wrap"><table class="api-table">
+                <thead><tr><th scope="col">适合的场景</th><th scope="col">思考档位</th><th scope="col">实际怎么用</th></tr></thead>
+                <tbody>
+                  <tr><td>每日资讯整理、TrendPilot 提字段、短摘要、标签去重</td><td>低档 <code>low</code></td><td>适合高频且容易抽查的活。图片粗分类、视频抽帧初筛也可以先用低档。</td></tr>
+                  <tr><td>TrendPilot 专家作品逐篇总结、几篇资料综合、按要求写长稿</td><td>中档 <code>medium</code></td><td>把原文依据、结论和适用条件一并交付。算力中心新请求默认用中档。</td></tr>
+                  <tr><td>图片细节、小字与图表、视频镜头定位、逐镜提示词</td><td>中档 <code>medium</code></td><td>小字先裁切，快动作先补关键帧。导演方案定稿后，HY 负责批量写提示词、素材清单和生成参数。</td></tr>
+                  <tr><td>查日志、改小功能、批量执行已经确定的修复</td><td>中档 <code>medium</code></td><td>给明确目标、输入和验收方式。复杂架构或跨平台疑难根因交给 Neon、Carbon 做判断。</td></tr>
+                  <tr><td>对比相互矛盾的资料、检查多镜头衔接、复核复杂图文</td><td>高档 <code>high</code></td><td>中档读到了材料但推断不到位时再升档。需要导演取舍或做高成本终审时，转 Neon 高档。</td></tr>
+                  <tr><td>高档反复漏掉关键因果、约束或异常边界的少数任务</td><td>最高档 <code>xhigh</code></td><td>先补齐证据和上下文，再针对难点复核一次。长材料反复查证也可用 Carbon 高档。</td></tr>
+                </tbody>
+              </table></div>
+              <p>文字 API 可直接传 <code>model: "gemini-4-hydrogen-low"</code> 等完整型号。识图与视频抽帧在识别接口传 <code>effort</code>。低、高、最高档取决于账号是否开通，低档不可选时用中档。需要限定只用 HY 时，首轮可传 <code>fallback_model: false</code>。</p>
               <h3>资讯、文字与运维</h3>
               <div class="api-table-wrap"><table class="api-table">
                 <thead><tr><th scope="col">场景</th><th scope="col">建议模型与思考档</th><th scope="col">升档条件和使用要点</th></tr></thead>
@@ -468,7 +492,6 @@ print(call("/api/real-pool/chat", {
               </table></div>
               <h3>算力中心选型与计费</h3>
               <p>算力中心 API 可显式选择 HY、Neon 或 Carbon 的文字模型。实际档位取决于账号已开通的选项。可使用 <code>gemini-4-hydrogen-low</code>、<code>gemini-4-neon-high</code> 或 <code>gemini-4-carbon-high</code> 等完整模型 ID。同时传 <code>effort</code> 时须与型号一致。首轮省略模型和档位使用 HY 中档。没有已开通 HY 低档的账号时，可选择 HY 中档。切换模型系列要新建对话。</p>
-              <p>3.8 Flash 低档适合过渡期的轻量任务。Antigravity 计划于 2026 年 11 月 30 日移除 3.8 Flash。算力中心新对话的旧 Flash 型号请求会优先走同档 HY，Flash 可用时承担发送前保底。单独选择 Flash 可在官方 CLI 仍提供该型号时操作。</p>
               <p>Carbon 可在「自定义对话」和文字 API 中选择。低档用于已有明确材料的快速复核，中档用于多步骤推理，高档用于长材料核验和反复失败的疑难任务。省略 Carbon 的档位时使用中档。3.5 Flash-Lite 可通过另接 Google Gemini API 使用。</p>
               <p>识图与视频抽帧使用同一个识别接口，支持 <code>effort</code> 和 <code>fallback_model</code>。需要准确跟随指定档位时，可关闭 Flash 保底。Neon 和 Carbon 的文字请求可传整理好的识别结果、镜头笔记或转写。现有识图接口不接收 <code>model</code>。新闻搜索先由外部工具获取原文，再交给算力中心整理。</p>
               <p>算力中心 CLI 使用账号的 Gemini Models 共享额度。下表是 Google Gemini 付费 API 标准价，单位为美元／百万 token，输出含思考用量。搜索调用、缓存和批处理另计。</p>
