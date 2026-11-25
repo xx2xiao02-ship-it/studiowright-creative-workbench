@@ -25,7 +25,7 @@ from api_keys import APIKeys
 from account_insights import Insights
 from console_store import MAX_GENERATION_RETRIES, RETRY_KINDS, SESSION_IMPORT_INTERRUPTED, Store
 from dispatch_limit import DispatchLimit
-from flow_proxy_guard import mapped_ports, reserve_confirmed_exit
+from flow_proxy_guard import exit_bindings, mapped_ports, release_removed_exits, reserve_confirmed_exit
 from flow_references import REFERENCE_FIELDS, ReferenceStore, task_reference_ids
 from web_auth import WebAuth
 from login_sessions import ImportRestoredOnCancel, Vault, normalize_bundle
@@ -114,11 +114,17 @@ class Console:
         except (OSError, ValueError):
             return True
 
+    def recycle_removed_exits(self):
+        removed = {row['profile'] for row in self.store.rows("""SELECT r.profile FROM flow_removed_accounts r
+            WHERE NOT EXISTS (SELECT 1 FROM tasks t WHERE t.profile=r.profile AND t.status IN ('queued','running'))""")}
+        return release_removed_exits(self.root, removed - self.busy - self.balance_busy)
+
     def ready_session_imports(self, busy, request_keys):
         ready = set()
         for row in self.store.rows("""SELECT t.id,t.profile,t.params,t.request_key,a.email FROM tasks t
             JOIN accounts a ON a.profile=t.profile
-            WHERE t.kind='session_import' AND t.status='queued' ORDER BY t.created,t.id"""):
+            WHERE t.kind='session_import' AND t.status='queued' AND NOT EXISTS
+              (SELECT 1 FROM flow_removed_accounts r WHERE r.profile=t.profile) ORDER BY t.created,t.id"""):
             if row['profile'] in busy or (request_keys is not None and row['request_key'] not in request_keys):
                 continue
             params = json.loads(row['params'])
@@ -368,6 +374,9 @@ class Console:
                 next_window_check = time.monotonic() + 5.0
                 with contextlib.suppress(OSError, ValueError, sqlite3.Error):
                     self.reconcile_rejected_windows()
+                if not self.test:
+                    with contextlib.suppress(OSError, ValueError, sqlite3.Error):
+                        self.recycle_removed_exits()
             keyboard_ready = self.desktop_keyboard_ready()
             if keyboard_ready:
                 if self.keyboard_warmup and self.keyboard_warmup.done():
@@ -888,10 +897,12 @@ def create_app(root, adapter, test=False):
         active_accounts = [a for a in accounts if not a.get('flow_removed')]
         preflight = c.dispatch_preflight([a['profile'] for a in active_accounts])
         incidents = c.store.page_incidents()
+        bindings = exit_bindings(c.root)
         for account in accounts:
             profile = account['profile']
             account['dispatch_preflight_reasons'] = preflight.get(profile, [])
             account['flow_page_incident'] = incidents.get(profile)
+            account['exit_info'] = bindings.get(profile)
         insights = c.insights.report(active_accounts, now, balance_refreshing)
         return JSONResponse(
             {
@@ -948,9 +959,26 @@ def create_app(root, adapter, test=False):
             if (set(data) != {'profile','confirmed'} or data['confirmed'] is not True
                     or not isinstance(profile, str) or not PROFILE.fullmatch(profile)):
                 raise ValueError('请确认要从 Flow 号池移除的账号。')
+            if profile in c.busy or profile in c.balance_busy:
+                return JSONResponse({'error': '该账号仍在检查、登录或执行任务，请结束后再移除。'}, status_code=409)
             if not c.store.remove_flow_account(profile):
                 return JSONResponse({'error': '该账号仍有排队、执行中或等待重试的生成任务。请处理原任务后再移除。'}, status_code=409)
-            return JSONResponse({'removed': True, 'message': '已从 Flow 号池移除，项目和任务历史已保留。'})
+            try:
+                released = c.recycle_removed_exits()
+                if profile in released:
+                    network_status = 'released'
+                    network_message = '网络位已释放。'
+                elif not (c.root / 'bin/exit-map.txt').exists() or profile not in mapped_ports(c.root / 'bin/exit-map.txt'):
+                    network_status = 'unbound'
+                    network_message = ''
+                else:
+                    network_status = 'pending'
+                    network_message = '网络位待释放，旧浏览器退出后会自动回收。'
+            except (OSError, ValueError, sqlite3.Error):
+                network_status = 'pending'
+                network_message = '网络位待释放，后台会继续检查。'
+            return JSONResponse({'removed': True, 'network_status': network_status,
+                                 'message': '已从 Flow 号池移除。' + network_message + '项目和任务历史已保留。'})
         except (ValueError, TypeError) as exc:
             return JSONResponse({'error': safe_error(exc)}, status_code=400)
 
@@ -1386,6 +1414,8 @@ def create_app(root, adapter, test=False):
                     raise ValueError("账号名称冲突，请先在后台登记目标账号。")
                 c.store.add_account(profile, bundle["email"])
                 c.store.update_account(profile, bundle["email"], "unknown")
+            if c.store.rows('SELECT 1 FROM flow_removed_accounts WHERE profile=?', (profile,)):
+                raise ValueError('此账号已从 Flow 号池移除，无法同步。')
             if c.remote.for_profile(profile):
                 raise ValueError("此账号正在远程登录，请先完成远程登录再同步。")
             pending = c.store.rows(
@@ -1457,6 +1487,8 @@ def create_app(root, adapter, test=False):
             try:
                 if not c.store.account(profile):
                     raise ValueError("此账号尚未登记。")
+                if c.store.rows('SELECT 1 FROM flow_removed_accounts WHERE profile=?', (profile,)):
+                    raise ValueError('此账号已从 Flow 号池移除，无法打开远程登录。')
                 old = c.remote.for_profile(profile)
                 if old:
                     return JSONResponse(c.remote.public(old))

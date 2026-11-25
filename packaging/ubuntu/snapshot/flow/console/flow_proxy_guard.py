@@ -2,6 +2,7 @@
 import ipaddress
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
 import re
 import stat
@@ -67,16 +68,8 @@ def reserve_confirmed_exit(root, profile):
         return None
     mapping = Path(root) / 'bin/exit-map.txt'
     inventory = mapping.with_name('exit-inventory.json')
-    lock = mapping.with_name('exit-map.txt.lock')
     try:
-        import fcntl
-
-        fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, 'rb') as handle:
-            info = os.fstat(handle.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
-                return None
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with _locked_mapping(mapping):
             assignments = mapped_ports(mapping)
             if profile in assignments:
                 return assignments[profile]
@@ -94,21 +87,95 @@ def reserve_confirmed_exit(root, profile):
             updated = original + separator + f'{profile} {port}\n'.encode('ascii')
             if len(updated) > MAP_LIMIT:
                 return None
-            staging = None
-            try:
-                with tempfile.NamedTemporaryFile(dir=mapping.parent, delete=False) as output:
-                    staging = Path(output.name)
-                    os.fchmod(output.fileno(), stat.S_IMODE(mapping.stat().st_mode))
-                    output.write(updated)
-                    output.flush()
-                    os.fsync(output.fileno())
-                os.replace(staging, mapping)
-            finally:
-                if staging is not None:
-                    staging.unlink(missing_ok=True)
+            _write_mapping(mapping, updated)
             return port
     except (ImportError, OSError, ValueError):
         return None
+
+
+@contextmanager
+def _locked_mapping(mapping):
+    import fcntl
+
+    lock = mapping.with_name('exit-map.txt.lock')
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'rb') as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+            raise ValueError('unsafe_flow_proxy_map_lock')
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield
+
+
+def _write_mapping(mapping, contents):
+    staging = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=mapping.parent, delete=False) as output:
+            staging = Path(output.name)
+            os.fchmod(output.fileno(), stat.S_IMODE(mapping.stat().st_mode))
+            output.write(contents)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(staging, mapping)
+    finally:
+        if staging is not None:
+            staging.unlink(missing_ok=True)
+
+
+def _profiles_in_use(root, profiles, processes=Path('/proc')):
+    paths = {os.fsencode((root / 'data/profiles' / profile).resolve()): profile for profile in profiles}
+    active = set()
+    for process in processes.iterdir():
+        if not process.name.isdecimal():
+            continue
+        try:
+            if process.stat().st_uid != os.getuid():
+                continue
+            command = (process / 'cmdline').read_bytes()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        for match in re.finditer(rb'(?:^|[\0 ])--user-data-dir=([^\0 ]+)', command):
+            profile = paths.get(match[1])
+            if profile is not None:
+                active.add(profile)
+    return active
+
+
+def release_removed_exits(root, removed):
+    """Release bindings only after the retired browser and any launcher have exited."""
+    root = Path(root)
+    mapping = root / 'bin/exit-map.txt'
+    if not removed or not mapping.exists():
+        return set()
+    with _locked_mapping(mapping):
+        candidates = set(mapped_ports(mapping)) & removed
+        if not candidates:
+            return set()
+        released = candidates - _profiles_in_use(root, candidates)
+        if released:
+            original = mapping.read_bytes().splitlines(keepends=True)
+            removed_names = {(name.encode('ascii'),) for name in released}
+            _write_mapping(mapping, b''.join(line for line in original
+                           if tuple(line.partition(b'#')[0].split()[:1]) not in removed_names))
+        return released
+
+
+def exit_bindings(root):
+    mapping = Path(root) / 'bin/exit-map.txt'
+    try:
+        assignments = mapped_ports(mapping)
+    except (OSError, ValueError):
+        return {}
+    try:
+        exits = _exit_inventory(mapping.with_name('exit-inventory.json'))
+    except (OSError, ValueError):
+        exits = {}
+    bindings = {}
+    for profile, port in assignments.items():
+        address, confirmed = exits.get(port, (None, False))
+        bindings[profile] = {'port': port, 'public_ip': str(address) if confirmed else None,
+                             'ipv6': str(address) if confirmed and address.version == 6 else None}
+    return bindings
 
 
 def check_proxy(port):

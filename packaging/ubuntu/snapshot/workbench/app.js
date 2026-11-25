@@ -2393,6 +2393,13 @@ function accountAvatarMarkup(identity, modelOptions) {
   return `<div class="account-avatar${neon ? ' has-gemini-neon' : ''}${carbon ? ' has-gemini-carbon' : ''}" ${attributes}>${initial}</div>`;
 }
 
+function flowNetworkSlot(binding) {
+  const label = Number.isInteger(binding?.port)
+    ? `端口 ${binding.port} · ${binding.public_ip || '公网 IP 待核验'}`
+    : '待分配';
+  return `<p class="account-check-status" data-flow-network-slot>网络位 · ${esc(label)}</p>`;
+}
+
 function renderAccounts() {
   const opened = [...document.querySelectorAll('.account-details[open] summary')].map(e=>e.getAttribute('aria-controls'));
   const focusedDetail = document.activeElement?.closest('.account-details')?.querySelector('summary')?.getAttribute('aria-controls');
@@ -2577,6 +2584,7 @@ function renderAccounts() {
       <div class="account-card-heading">${accountAvatarMarkup(identity, avatarModels)}<div class="account-identity"><span class="account-alias">${esc(item.label || item.profile)}</span><h3 title="${esc(identity)}">${esc(identity)}</h3></div>${flow ? `<span class="account-login ${signIn ? 'is-login-required' : item.flow_login === 'verified' ? 'is-ready' : ''}">${esc(login)}</span>` : ''}
         <div class="account-detail-anchor"><details class="account-details"><summary aria-label="查看 ${esc(identity)} 的详细状态" aria-controls="account-detail-${accountKey}">详情</summary></details><div id="account-detail-${accountKey}" class="account-detail-popup"><strong>账号状态详情</strong>${flow ? `<p>Flow：${esc(flowStatusText)} · ${esc(freshness + observed)}。${hasBalance ? '剩余 ' + esc(balance) + ' 积分。' : ''}未提供积分总额度。</p>${coolingInfo ? `<p>${esc(coolingInfo)}</p>` : ''}<p>Flow · ${esc(flowPerformance)}</p>` : `${officialDetails(official)}<p>Gemini · ${esc(gemPerformance)}</p>`}${issues.length ? `<div class="account-detail-issues"><strong>状态说明</strong>${issues.map(issue => `<p><b>${esc(issue.title)}</b><br>${esc(issue.impact)} ${esc(issue.action)}</p>`).join('')}</div>` : ''}</div></div></div>
       <div class="account-services account-services-single">${flow ? `<div class="account-service account-service-flow${flowNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc(('Flow：' + flowStatusText))}" title="${esc(('Flow：' + flowStatusText))}"><div class="account-service-heading"><span>Flow</span><strong class="account-health ${flowPaused ? 'is-paused' : cooling ? 'is-cooling' : flowRow?.status!=='ready' ? 'is-unknown' : ''}">${esc(flowStatusText)}</strong></div><div class="account-flow-value"><div title="${esc(flowBalanceTitle)}"><strong>${esc(balance)}</strong><small class="account-quota-reset">下次积分到账 ${esc(flowNextCredit || '待官方更新')}${flowNextCredit && !item.flow_balance_fresh ? '（上次读取）' : ''}</small></div>${cooling ? `<div class="account-cooldown" data-risk-paused="${flowPaused}"${cooldownEnd !== null ? ` data-cooldown-end="${cooldownEnd}"` : ' aria-label="冷却中，剩余时间待核对"'}><span class="account-cooldown-time">—</span><span class="account-cooldown-label">冷却中</span></div>` : '<span class="account-credit-icon" aria-hidden="true">✦</span>'}</div></div>` : `<div class="account-service account-service-gemini${geminiNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}" title="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}"><div class="account-service-heading"><span>Gemini</span><strong class="account-health${geminiReady && !geminiNeedsAttention ? '' : ' is-unknown'}">${esc(geminiStatusText)}</strong></div>${item.gemini_removed ? '' : `<div data-account-quota="${accountKey}">${quotaView.html}</div>`}</div>`}</div>
+      ${flow ? flowNetworkSlot(item.exit_info) : ''}
       ${flow && flowReason?.showOnCard ? flowNotice : ''}
       ${!flow && geminiRow?.checking ? `<p class="account-check-status">Gemini · ${esc(geminiRow.note || '正在检查云端响应')}</p>` : ''}
       ${diagnostics ? `<details class="account-alert" data-account-fold="alert-${accountKey}"><summary><strong>${needsAttention || flow && flowPaused ? '异常详情' : '状态说明'}</strong><span>${flow ? 'Flow' : 'Gemini'}</span></summary><div class="account-alert-body">${diagnostics}</div></details>` : ''}
@@ -2602,7 +2610,7 @@ async function removeFlowAccountFromPanel(button) {
   const key = button.dataset.removeFlow;
   const account = state.snapshot?.real_accounts?.items?.find(item => item.key === 'flow-account-' + key);
   if (button.disabled || !account?.email || account.flow_removed) return;
-  if (!window.confirm(`从 Flow 号池移除 ${account.email}？该账号将停止 Flow 派发。项目、任务历史和 Gemini、Music 使用资格会保留。`)) return;
+  if (!window.confirm(`从 Flow 号池移除 ${account.email}？该账号将停止 Flow 派发。退出旧浏览器后，网络位会自动释放。项目、任务历史和 Gemini、Music 使用资格会保留。`)) return;
   const feedback = $('accountActionMessage');
   button.disabled = true;
   accountActionsInFlight.add(button);

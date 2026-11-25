@@ -17,7 +17,7 @@ from test_flow_regressions import fixture_directory
 SNAPSHOT = Path(__file__).resolve().parents[1] / 'packaging/ubuntu/snapshot'
 sys.path[:0] = [str(SNAPSHOT / name) for name in ('flow/console', 'workbench', 'flow/source/src')]
 from adapter import FakeAdapter
-from flow_proxy_guard import mapped_ports, reserve_confirmed_exit
+from flow_proxy_guard import _profiles_in_use, mapped_ports, reserve_confirmed_exit
 from login_sessions import ImportRestoredOnCancel
 
 spec = spec_from_file_location('flow_proxy_onboarding_console', SNAPSHOT / 'flow/console/server.py')
@@ -270,6 +270,36 @@ class WindowsProxyOnboarding(unittest.TestCase):
         winner = profiles[results.index(3111)]
         self.assertEqual(mapped_ports(self.mapping), {'existing-profile': 3101, winner: 3111})
         self.assertEqual(reserve_confirmed_exit(self.root, winner), 3111)
+
+    def test_removal_preserves_open_browser_and_reuses_its_exit_after_close(self):
+        old = 'existing-profile'
+        self.store.add_account(old, 'Existing')
+        self.store.update_account(old, 'old@example.test', 'verified')
+        item = self.sync('replacement@example.test')
+        self.assertIsNone(self.claim())
+        path = '/api/accounts/flow-remove'
+        headers = {'Origin': 'http://testserver', 'X-Console-Request': '1'}
+        process = self.root / 'proc/123'
+        process.mkdir(parents=True)
+        command = process / 'cmdline'
+        command.write_bytes(f"chrome --no-default-browser-check --user-data-dir={self.root / 'data/profiles' / old} --remote-debugging-port=1".encode())
+        with patch.object(self.store, 'authenticated', return_value=True), patch(
+                'flow_proxy_guard._profiles_in_use',
+                side_effect=lambda root, profiles: _profiles_in_use(root, profiles, process.parent)):
+            result = self.client.post(path, headers=headers, json={'profile': old, 'confirmed': True}).json()
+            self.assertEqual(result['network_status'], 'pending')
+            self.assertEqual(mapped_ports(self.mapping), {old: 3101})
+            self.assertIsNone(self.claim())
+            command.unlink()
+            self.assertEqual(self.console.recycle_removed_exits(), {old})
+            self.assertEqual(self.claim()['id'], item['id'])
+            self.assertEqual(self.console.recycle_removed_exits(), set())
+            self.assertEqual(mapped_ports(self.mapping), {item['profile']: 3101})
+            current = self.client.get('/api/state', headers=headers).json()
+            accounts = {row['profile']: row for row in current['accounts']}
+            self.assertIsNone(accounts[old]['exit_info'])
+            self.assertEqual(accounts[item['profile']]['exit_info'],
+                             {'port': 3101, 'public_ip': '11.22.33.1', 'ipv6': None})
 
     def test_unverified_inventory_keeps_existing_binding_and_blocks_new_claims(self):
         email = 'existing@example.test'

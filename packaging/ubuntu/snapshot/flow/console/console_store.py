@@ -81,6 +81,9 @@ class Store:
                       AND (e.status IN ('queued','running') OR r.state='pending_switch')
                     LIMIT 1""", (profile,)).fetchone():
                 return False
+            if db.execute("""SELECT 1 FROM tasks WHERE profile=?
+                    AND kind='session_import' AND status IN ('queued','running') LIMIT 1""", (profile,)).fetchone():
+                return False
             db.execute('INSERT OR IGNORE INTO flow_removed_accounts VALUES(?,?)', (profile, time.time()))
             return True
 

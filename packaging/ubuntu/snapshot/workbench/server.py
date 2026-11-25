@@ -400,69 +400,6 @@ def task_rows(state, projects):
     return rows
 
 
-FLOW9EXIT_MAP = Path.home() / '.local/share/studiowright-evaluation/bin/exit-map.txt'
-
-
-def flow9exit_windows():
-    """Scan /proc for running Chrome window mains: profile -> debug port.
-
-    Chromium flattens /proc cmdline into a single space-joined string (NUL
-    separation is gone), so parse with regex. A window main carries
-    --user-data-dir and --remote-debugging-port but no --type=; children
-    (renderers etc.) carry a flattened copy of the parent flags plus
-    --type=, so the --type= guard excludes them.
-    """
-    import re
-    result = {}
-    udd = re.compile(r'--user-data-dir=(\S+)')
-    dbg = re.compile(r'--remote-debugging-port=(\d+)')
-    typ = re.compile(r'--type=')
-    for proc in Path('/proc').glob('[0-9]*/cmdline'):
-        try:
-            raw = proc.read_bytes()
-        except OSError:
-            continue
-        if b'chrome' not in raw:
-            continue
-        joined = raw.replace(b'\0', b' ').decode('utf-8', 'replace')
-        if typ.search(joined) or not udd.search(joined):
-            continue
-        match_udd = udd.search(joined)
-        match_dbg = dbg.search(joined)
-        if not (match_udd and match_dbg):
-            continue
-        profile = match_udd.group(1).rsplit('/', 1)[-1]
-        result[profile] = match_dbg.group(1)
-    return result
-
-
-def flow9exit_info():
-    """Read exit-map.txt and project each pool profile's dedicated egress.
-
-    Port 310N maps to IPv6 2607:9000:1000:800N::1 (one /64 per account).
-    """
-    info = {}
-    try:
-        lines = FLOW9EXIT_MAP.read_text(encoding='utf-8').splitlines()
-    except OSError:
-        return info
-    windows = flow9exit_windows()
-    for line in lines:
-        parts = line.split()
-        if len(parts) != 2 or parts[0].startswith('#'):
-            continue
-        name, port = parts
-        try:
-            octet = int(port) - 3100
-        except ValueError:
-            continue
-        if not 1 <= octet <= 9:
-            continue
-        info[name] = {'port': int(port), 'ipv6': '2607:9000:1000:800%d::1' % octet,
-                      'window_alive': name in windows, 'debug_port': windows.get(name)}
-    return info
-
-
 def account_rows(state):
     """Project existing Flow account status; never copy credentials or guess Gemini bindings."""
     accounts = state.get("accounts")
@@ -513,7 +450,13 @@ def account_rows(state):
         balance = info.get("balance")
         if isinstance(balance, bool) or not isinstance(balance, (int, float)) or not math.isfinite(balance) or balance < 0:
             balance = None
+        network = row.get('exit_info')
+        port = network.get('port') if isinstance(network, dict) else None
+        exit_info = ({'port': port, 'public_ip': clean_text(network.get('public_ip'), 64) or None,
+                      'ipv6': clean_text(network.get('ipv6'), 64) or None}
+                     if type(port) is int and 1 <= port <= 65535 else None)
         rows.append({"key": "flow-account-" + hashlib.sha256(profile.encode("utf-8")).hexdigest(),
+                     "exit_info": exit_info,
                      "profile": profile, "label": clean_text(row.get("label"), 120), "email": email,
                      "flow_login": "verified" if row.get("state") == "verified" else "unknown",
                      "flow_removed": row.get("flow_removed") == 1,
@@ -853,10 +796,14 @@ class Sources:
             with self.opener.open(request, timeout=self.timeout) as response:
                 result = json.loads(response.read(8193))
                 if isinstance(result, dict) and result.get('removed') is True:
-                    return 200, {'removed':True, 'message':'已从 Flow 号池移除，项目和任务历史已保留。'}
+                    return 200, {'removed':True, 'message':clean_text(result.get('message'), 240) or '已从 Flow 号池移除。'}
         except HTTPError as exc:
             if exc.code == 409:
-                return 409, {'error':'该账号仍有排队、执行中或等待重试的生成任务，请处理原任务后再移除。'}
+                try:
+                    error = clean_text(json.loads(exc.read(8193)).get('error'), 180)
+                except (ValueError, AttributeError, OSError):
+                    error = ''
+                return 409, {'error': error or '账号仍有未完成的操作，请结束后再移除。'}
         except (OSError, ValueError):
             pass
         return 503, {'error':'Flow 账号移除状态未确认，请刷新后核对。'}
@@ -1014,12 +961,6 @@ class Sources:
             return None, error or '任务记录暂不可读取。'
         projects = project_rows(state)
         accounts = account_rows(state)
-        exit_info = flow9exit_info()
-        if exit_info and accounts:
-            for item in accounts:
-                data = exit_info.get(item.get('profile'))
-                if data:
-                    item['exit_info'] = data
         tasks = task_rows(state, projects)
         flow_task_notes(tasks, accounts, state.get('coordination'))
         return {"checked_at": time.time(), "flow_state": {"available": True, "skipped_tasks": len(state['tasks']) - len(tasks)},
@@ -1176,12 +1117,6 @@ class Sources:
         accounts = account_rows(state) if state is not None else None
         if submission and state is not None and accounts is None:
             LOGGER.warning('Flow account state returned invalid account data before submission.')
-        exit_info = flow9exit_info()
-        if exit_info and accounts:
-            for item in accounts:
-                data = exit_info.get(item.get('profile'))
-                if data:
-                    item['exit_info'] = data
         valid_projects = {(p['source_profile'], p['source_id']): p['key'] for p in projects}
         retry_projects = {}
         for item in state.get('retry_projects', []) if isinstance(state, dict) else []:
