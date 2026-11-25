@@ -101,6 +101,17 @@ class WindowsProxyOnboarding(unittest.TestCase):
     def claim(self):
         return self.store.claim(set(), session_import_allowed=self.console.ready_session_imports(set(), None))
 
+    def test_flow_entry_only_serves_the_redirect_and_browser_job(self):
+        entry = self.client.get('/')
+        self.assertEqual(entry.status_code, 200)
+        self.assertIn('http://127.0.0.1:18920/', entry.text)
+        self.assertIn('/static/chrome-job.js', entry.text)
+        self.assertNotIn('legacyWorkspace', entry.text)
+        self.assertEqual(self.client.get('/static/chrome-job.js').status_code, 200)
+        for old in ('app.js', 'account-insights.js', 'library-tools.js'):
+            self.assertEqual(self.client.get('/static/' + old).status_code, 404)
+        self.assertEqual(self.client.get('/static/api.html').status_code, 200)
+
     def test_same_cached_import_waits_then_verifies_with_a_unique_exit(self):
         email = 'new-account@example.test'
         item = self.sync(email)

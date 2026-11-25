@@ -1,4 +1,10 @@
 'use strict';
+async function copyTextSafely(text){
+ try{await navigator.clipboard.writeText(text);return true;}catch{
+  const box=document.createElement('textarea');box.value=text;box.setAttribute('aria-label','待复制内容');box.style.position='fixed';box.style.opacity='0';document.body.append(box);box.select();let ok=false;try{ok=document.execCommand('copy');}finally{box.remove();}if(ok)return true;
+  const fallbackBox=document.getElementById('copyFallbackText');fallbackBox.value=text;document.getElementById('copyFallback').showModal();fallbackBox.select();return false;
+ }
+}
 let latestLibraryExample=null;
 async function docsApi(path,body){const r=await fetch(path,{method:body===undefined?'GET':'POST',credentials:'same-origin',headers:body===undefined?{}:{'Content-Type':'application/json','X-Console-Request':'1'},body:body===undefined?undefined:JSON.stringify(body)});const data=await r.json();if(!r.ok)throw new Error(data.error||'请求失败');return data;}
 async function loadKeys(){try{const data=await docsApi('/api/keys');const list=el('keyList');list.replaceChildren();for(const k of data.items){const row=document.createElement('div');row.className='key-row';const label=document.createElement('span');label.textContent=`${k.name} · ${k.scope==='read'?'只读素材与任务':'生成与读取'} · ${k.revoked?'已撤销':'有效'}`;row.append(label);if(!k.revoked){const b=document.createElement('button');b.className='secondary';b.textContent='撤销';b.onclick=async()=>{try{await docsApi('/api/keys/'+k.id+'/revoke',{});el('keyStatus').textContent='密钥已撤销，使用它的项目将无法继续调用。';await loadKeys();}catch(e){el('keyStatus').textContent=e.message;}};row.append(b);}list.append(row);}if(!data.items.length)list.textContent='还没有 API Key。建议为每个调用项目创建一个只读密钥。';}catch(e){el('keyStatus').textContent=e.message;}}

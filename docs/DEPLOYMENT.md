@@ -23,8 +23,8 @@ Windows 安装桌面操作端，通过 SSH 打开 Ubuntu 上的工作台。Ubunt
 | 端口 | 所在机器及范围 | 用途 |
 | --- | --- | --- |
 | `22/TCP` 或自定义 SSH 端口 | Ubuntu，限授权连接来源 | Windows 登录与本机端口转发 |
-| `18888/TCP` | Ubuntu 本机 | Flow 原后台 |
-| `18920/TCP` | Ubuntu 本机 | 工作台页面与内部接口 |
+| `18888/TCP` | Ubuntu 本机 | Flow 服务与 Windows 账号助手同步入口 |
+| `18920/TCP` | Ubuntu 本机 | 算力中心页面与内部接口 |
 | `18922/TCP` | Ubuntu 本机 | 带工作台密钥的统一 API |
 | `18925/UDP` | Ubuntu 局域网 | Windows 查找服务器。禁用发现时可手动填地址 |
 | `18890/TCP`、`18921/TCP` | 现有 Ubuntu 本机 | 可选的 Chrome 管理服务与独立调度服务，基础安装器未单独部署这两项 |
