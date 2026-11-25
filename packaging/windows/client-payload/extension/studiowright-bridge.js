@@ -91,6 +91,7 @@ function swCanWaitForFlow(error) {
 async function swFindFlowAccount(expected) {
     const active = (await chrome.tabs.query({active:true, lastFocusedWindow:true, url:'https://flow.google.com/*'}))
         .filter(tab => !flowLanding.test(tab.url || ''));
+    let ambiguous = null;
     if (active.length === 1) {
         try {
             const email = swNormalizeEmail(await readFlowAccount(active[0].id));
@@ -99,23 +100,25 @@ async function swFindFlowAccount(expected) {
             return email;
         } catch (error) {
             if (!expected || !swCanWaitForFlow(error)) throw error;
+            if (error instanceof FlowIdentityAmbiguous) ambiguous = error;
         }
     }
     if (!expected) throw new Error('请先切到要同步账号的 Flow 页面，再使用插件同步。');
     const tabs = await chrome.tabs.query({url:'https://flow.google.com/*'});
     const found = new Set();
     for (const tab of tabs) {
+        if (active.length === 1 && tab.id === active[0].id) continue;
         if (flowLanding.test(tab.url || '')) continue;
         try {
             const email = swNormalizeEmail(await readFlowAccount(tab.id));
             if (email) found.add(email);
         } catch (error) {
-            // A browser error page cannot contain a usable Flow identity.
-            if (swCanWaitForFlow(error)) continue;
-            throw error;
+            if (!swCanWaitForFlow(error)) throw error;
+            if (error instanceof FlowIdentityAmbiguous) ambiguous = error;
         }
     }
     if (found.has(expected)) return expected;
+    if (ambiguous) throw ambiguous;
     if (found.size) throw new Error('Flow 页面邮箱与所选 Chrome 用户不一致，已停止采集。');
     throw new FlowIdentityUnavailable('所选 Chrome 用户的 Flow 页面尚未显示登录邮箱。');
 }
@@ -147,12 +150,14 @@ async function swPrepareFlowAccount(expected) {
     const target = tabs.find(tab => flowLanding.test(tab.url || ''))
         || await chrome.tabs.create({url:'https://flow.google.com/', active:false});
     let entered = false;
+    let ambiguous = false;
     for (let i = 0; i < 24; i++) {
         await new Promise(resolve => setTimeout(resolve, 1500));
         try {
             return await swFindFlowAccount(expected);
         } catch (error) {
             if (!swCanWaitForFlow(error)) throw error;
+            ambiguous = error instanceof FlowIdentityAmbiguous;
         }
         const tab = await chrome.tabs.get(target.id);
         if (!entered && flowLanding.test(tab.url || '')) entered = await swEnterFlowWorkspace(tab.id);
@@ -160,6 +165,7 @@ async function swPrepareFlowAccount(expected) {
             throw new Error('Google 要求登录，请在这个 Windows Chrome 用户中确认 Flow 登录。');
         }
     }
+    if (ambiguous) throw new Error('Flow 显示多个邮箱，无法确认当前账号。请在此 Chrome 用户的 Flow 页面右上角核对登录邮箱，再重新同步。');
     throw new Error('已打开 Flow，但没有读到已登录邮箱，请查看这个 Windows Chrome 用户的 Flow 页面。');
 }
 

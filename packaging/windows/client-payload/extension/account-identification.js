@@ -1,6 +1,7 @@
 // Read the account displayed by Flow. This module never reads Cookies,
 // saves credentials, calls the backend, or starts a synchronization.
 class FlowIdentityUnavailable extends Error {}
+class FlowIdentityAmbiguous extends FlowIdentityUnavailable {}
 
 async function readFlowAccount(tabId) {
     const results = await chrome.scripting.executeScript({
@@ -8,10 +9,14 @@ async function readFlowAccount(tabId) {
         world: 'MAIN',
         func: () => {
             if (location.hostname !== 'flow.google.com') return [];
-            const current = window.WIZ_global_data?.oPEP7c;
+            const state = window.WIZ_global_data || {};
+            const validEmail = value => typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
             // Account menus can also list other signed-in Google accounts.
-            if (typeof current === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(current.trim())) {
-                return [current.trim().toLowerCase()];
+            if (validEmail(state.oPEP7c)) return [state.oPEP7c.trim().toLowerCase()];
+            if (state.SNlM0e && state.FdrFJe) {
+                const signedInEmails = [...new Set(Object.values(state).filter(validEmail)
+                    .map(email => email.trim().toLowerCase()))];
+                if (signedInEmails.length) return signedInEmails;
             }
             const emails = new Set();
             for (const node of document.querySelectorAll('[aria-label],[title]')) {
@@ -27,7 +32,7 @@ async function readFlowAccount(tabId) {
     });
     const emails = results[0]?.result || [];
     if (!emails.length) throw new FlowIdentityUnavailable('当前 Flow 页面未显示登录邮箱。');
-    if (emails.length !== 1) throw new Error('未能唯一识别当前 Flow 邮箱，请确认页面已登录；也可以手动填写。');
+    if (emails.length !== 1) throw new FlowIdentityAmbiguous('未能唯一识别当前 Flow 邮箱，请确认页面已登录；也可以手动填写。');
     const email = String(emails[0]).trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Flow 返回的邮箱格式无效。');
     return email;
