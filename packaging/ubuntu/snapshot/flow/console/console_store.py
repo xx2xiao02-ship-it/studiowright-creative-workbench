@@ -260,6 +260,7 @@ class Store:
               active_generation_projects=None, request_keys=None, *, session_import_allowed=None):
         with closing(self.connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
+            importing = db.execute("SELECT 1 FROM tasks WHERE kind='session_import' AND status='running' LIMIT 1").fetchone()
             rows = db.execute(
                 """SELECT e.* FROM flow_task_execution_rows e WHERE e.status='queued'
                 AND (e.kind NOT IN ('image','video') OR NOT EXISTS
@@ -267,7 +268,8 @@ class Store:
                 ORDER BY e.created"""
             ).fetchall()
             row = next((r for r in rows if (request_keys is None or r['request_key'] in request_keys) and r["profile"] not in busy and
-                        (session_import_allowed is None or r['kind'] != 'session_import' or r['id'] in session_import_allowed) and
+                        (r['kind'] != 'session_import' or (not importing and
+                         (session_import_allowed is None or r['id'] in session_import_allowed))) and
                         (r['kind'] not in ('image', 'video') or
                          (r['profile'], r['project']) not in (active_generation_projects or set())) and
                         (generation_allowed is None or r["kind"] not in ('image', 'video') or

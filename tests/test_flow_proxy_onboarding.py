@@ -168,6 +168,20 @@ class WindowsProxyOnboarding(unittest.TestCase):
         self.assertFalse(vault.path(bundle_id).exists())
         self.assertEqual(self.mapping.read_text(encoding='ascii'), self.original)
 
+    def test_claim_serializes_imports_without_blocking_other_task_types(self):
+        for profile, email in [('first', 'first@example.test'), ('second', 'second@example.test')]:
+            self.store.add_account(profile, profile)
+            self.store.update_account(profile, email, 'verified')
+        first = self.sync('first@example.test')
+        second = self.sync('second@example.test')
+        active = self.claim()
+        self.assertEqual(active['id'], first['id'])
+        self.assertIsNone(self.claim())
+        other = self.store.create_task('other', None, 'doctor', {}, 'fixture-doctor')
+        self.assertEqual(self.claim()['id'], other['id'])
+        asyncio.run(self.console.execute(active))
+        self.assertEqual(self.claim()['id'], second['id'])
+
     def test_concurrent_profiles_cannot_share_the_last_exit(self):
         self.add_spare()
         barrier = Barrier(2)

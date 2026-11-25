@@ -7,11 +7,13 @@ const instructions = {
   open: '请在对应窗口确认 Flow 登录。',
   install: '请按安装向导在各 Chrome 用户中确认加载或重载。',
   check: '连接检查结果将显示在「插件状态」，此操作不会同步登录信息。',
-  sync: '同步结果将逐个更新，请以 Ubuntu 登录核对结果为准。',
+  sync: '将逐个打开 Chrome 并同步，可以留在这里查看结果。',
 };
 const syncLabels = {
+  queued: ['排队中', 'warn'],
   waiting: ['等待连接', 'warn'],
   running: ['同步中', 'warn'],
+  pending: ['待核对', 'warn'],
   succeeded: ['同步完成', 'success'],
   failed: ['同步失败', 'error'],
 };
@@ -197,12 +199,17 @@ async function run(action, targets = [...selected], button = $(action)) {
       || (action === 'install' && !installReady) || (action === 'check' && !canCheck)) return;
   busy = true;
   const label = button.textContent;
-  button.textContent = '正在打开窗口…';
+  button.textContent = action === 'sync' ? '正在排队…' : '正在打开窗口…';
   renderSelection();
-  showStatus('正在打开所选账号的 Chrome 窗口…');
+  showStatus(action === 'sync' ? '正在提交同步队列…' : '正在打开所选账号的 Chrome 窗口…');
   try {
     const result = await request('/api/open', {action, profiles:targets});
-    showStatus(`已打开 ${result.opened.length} 个账号窗口。${instructions[action]}`);
+    if (action === 'sync' && Array.isArray(result.queued)) {
+      const reused = result.reused?.length ? `，${result.reused.length} 个已有任务` : '';
+      showStatus(`已排队 ${result.queued.length} 个账号${reused}。${instructions.sync}`);
+    } else {
+      showStatus(`已打开 ${result.opened.length} 个账号窗口。${instructions[action]}`);
+    }
     if (action === 'install') $('plugin-help').open = true;
     await refresh();
   } catch (error) {

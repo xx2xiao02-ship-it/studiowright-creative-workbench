@@ -18,6 +18,10 @@ ORIGIN = 'http://127.0.0.1:18890'
 BACKEND = 'http://127.0.0.1:18888'
 JOBS = {}
 LOCK = threading.Lock()
+SYNC_QUEUE = threading.Condition(LOCK)
+SYNC_WORKER = None
+SYNC_OPEN_SECONDS = 75
+SYNC_CONFIRM_SECONDS = 330
 LAUNCH_LOCK = threading.Lock()
 LAST_LAUNCH = 0.0
 SYNC_BLOCK_REASON = ''
@@ -124,6 +128,84 @@ def open_profile(profile, url):
             raise ValueError('Chrome 启动异常（退出码 '+str(code)+'），已停止继续批量打开；请先关闭 Chrome 错误提示。')
 
 
+def flow_backend_ready():
+    connection = HTTPConnection('127.0.0.1', 18888, timeout=4)
+    try:
+        connection.request('GET', '/health', headers={'Authorization': 'Bearer sw-readonly-probe',
+                                                       'X-Studiowright-Probe': '1'})
+        response = connection.getresponse()
+        body = json.loads(response.read(4096))
+        if EXTENSION_ID == 'kbnibljeinmjmmpholicjkaiehmilbbk' and response.status == 401:
+            return body.get('error') == 'API Key 无效或已撤销。'
+        return response.status == 200 and body.get('application') == 'studiowright-console'
+    except (OSError, HTTPException, ValueError, AttributeError):
+        return False
+    finally:
+        connection.close()
+
+
+def process_sync_queue():
+    while True:
+        with SYNC_QUEUE:
+            queued = next(((nonce, job) for nonce, job in JOBS.items() if job['status'] == 'queued'), None)
+            if queued is None:
+                SYNC_QUEUE.wait()
+                continue
+            nonce, job = queued
+            if job['expires'] <= time.time():
+                job.update(status='failed', message='排队超时，请重新发起同步。', expires=time.time() + 1200)
+                continue
+        if not flow_backend_ready():
+            with SYNC_QUEUE:
+                job['message'] = '等待 Ubuntu 同步服务恢复，恢复后自动继续。'
+                SYNC_QUEUE.wait(timeout=5)
+            continue
+        with SYNC_QUEUE:
+            job.update(status='waiting', message='正在打开对应 Chrome 用户并连接插件。', expires=time.time() + 3600)
+        try:
+            open_profile(job['profile'], BACKEND + '/#chrome-job=' + nonce)
+        except (ValueError, OSError) as error:
+            with SYNC_QUEUE:
+                job.update(status='failed', message=str(error)[:500])
+            continue
+        launched = time.monotonic()
+        with SYNC_QUEUE:
+            while job['status'] in ('waiting', 'running'):
+                waiting = job['status'] == 'waiting'
+                remaining = (SYNC_OPEN_SECONDS if waiting else SYNC_CONFIRM_SECONDS) - (time.monotonic() - launched)
+                if remaining <= 0:
+                    if waiting:
+                        job.update(status='failed', message='未收到插件连接结果，请检查此 Chrome 用户。')
+                    else:
+                        job.update(status='pending', message='Ubuntu 核对结果待确认，请查看算力中心的账号检查记录。')
+                    break
+                SYNC_QUEUE.wait(timeout=remaining)
+
+
+def enqueue_sync(selected):
+    global SYNC_WORKER
+    now = time.time()
+    queued, reused = [], []
+    with SYNC_QUEUE:
+        for nonce in [nonce for nonce, job in JOBS.items() if job['expires'] < now and job['status'] != 'queued']:
+            del JOBS[nonce]
+        active = {job['profile'] for job in JOBS.values() if job.get('action') == 'sync'
+                  and job['status'] in ('queued', 'waiting', 'running', 'pending') and job['expires'] >= now}
+        for profile in dict.fromkeys(selected):
+            if profile in active:
+                reused.append(profile)
+                continue
+            JOBS[secrets.token_urlsafe(32)] = {'profile': profile, 'status': 'queued',
+                'message': '等待前面的账号完成。', 'action': 'sync',
+                'extension_id': EXTENSION_ID, 'batch': True, 'expires': now + 6 * 3600}
+            queued.append(profile)
+        if SYNC_WORKER is None or not SYNC_WORKER.is_alive():
+            SYNC_WORKER = threading.Thread(target=process_sync_queue, daemon=True, name='flow-account-sync')
+            SYNC_WORKER.start()
+        SYNC_QUEUE.notify_all()
+    return {'opened': [], 'queued': queued, 'reused': reused}
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args): pass
 
@@ -154,7 +236,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path in ('/', '/chrome-manager.js'):
             file=HERE/('chrome-manager.html' if self.path=='/' else 'chrome-manager.js')
             return self.reply(file.read_bytes(),mime='text/html; charset=utf-8' if self.path=='/' else 'text/javascript; charset=utf-8')
-        if self.path=='/health': return self.reply({'application':'studiowright-chrome-manager'})
+        if self.path=='/health': return self.reply({'application':'studiowright-chrome-manager', 'sync_queue':True})
         if self.path=='/api/profiles':
             with LOCK: local=profiles()
             return self.reply({'profiles':local, 'extension_folder':str(EXTENSION) if install_ready() else '',
@@ -190,8 +272,11 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError(SYNC_BLOCK_REASON or '插件文件夹缺失，请重新安装 StudioWright 桌面版。')
                 if action=='check' and not PLUGIN_CHECK_SUPPORTED:
                     raise ValueError('当前 Ubuntu 后台未启用新版插件连接检查。')
-                known={p['profile'] for p in profiles()}
-                if any(p not in known for p in selected): raise ValueError('账号列表已变化，请刷新')
+                with LOCK:
+                    known={p['profile'] for p in profiles()}
+                if any(not isinstance(p, str) or p not in known for p in selected): raise ValueError('账号列表已变化，请刷新')
+                if action == 'sync':
+                    return self.reply(enqueue_sync(selected))
                 launched=[]
                 for profile in dict.fromkeys(selected):
                     if action=='install':
@@ -207,14 +292,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply({'opened':launched})
             if self.path.startswith('/api/job/'):
                 nonce=self.path.rsplit('/',1)[-1]
-                with LOCK:
+                with SYNC_QUEUE:
                     job=JOBS.get(nonce)
                     if not job or job['expires']<time.time(): raise ValueError('请求已过期')
                     state=body.get('status')
-                    if state not in ('waiting','running','succeeded','failed'): raise ValueError('状态无效')
+                    if state not in ('waiting','running','pending','succeeded','failed'): raise ValueError('状态无效')
                     message=body.get('message','')
                     if not isinstance(message,str): raise ValueError('结果格式不正确')
+                    current = job['status']
+                    if current == 'queued' or (current in ('succeeded', 'failed') and current != state):
+                        return self.reply({'error':'本次窗口任务已结束，请查看同步列表。'},409)
                     job.update(status=state,message=message[:500])
+                    SYNC_QUEUE.notify_all()
                 return self.reply({'ok':True})
             self.reply({'error':'未找到'},404)
         except (ValueError,TypeError,OSError) as exc:

@@ -2,6 +2,8 @@
 
 const $ = id => document.getElementById(id);
 const localBridgeIds = ['aaipdbnbbgeadlodajhcobjmomnemclj', 'kbnibljeinmjmmpholicjkaiehmilbbk'];
+const pause = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+class PluginConnectionError extends Error {}
 
 async function pairPlugin(extensionId) {
   const response = await fetch('/api/bridge/pair', {
@@ -9,6 +11,7 @@ async function pairPlugin(extensionId) {
     headers: {'Content-Type': 'application/json', 'X-Console-Request': '1'},
     body: JSON.stringify({extensionId}),
     credentials: 'same-origin',
+    signal: AbortSignal.timeout(12000),
   });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || '连接插件失败，请稍后重试。');
@@ -18,17 +21,19 @@ async function pairPlugin(extensionId) {
 function pluginCommand(id, message, timeout = 15000) {
   return new Promise((resolve, reject) => {
     if (!globalThis.chrome?.runtime?.sendMessage) {
-      reject(new Error('当前窗口尚未接通插件'));
+      reject(new PluginConnectionError('当前窗口尚未接通插件'));
       return;
     }
-    const timer = setTimeout(() => reject(new Error('插件响应超时')), timeout);
+    const timer = setTimeout(() => reject(new PluginConnectionError('插件响应超时')), timeout);
     try {
       chrome.runtime.sendMessage(id, message, result => {
         clearTimeout(timer);
         if (chrome.runtime.lastError) {
-          reject(new Error('插件未接通，请在该 Chrome 用户中安装或重新加载'));
-        } else if (!result?.ok) {
-          reject(new Error(result?.error || '插件未响应'));
+          reject(new PluginConnectionError('插件未接通，请在该 Chrome 用户中安装或重新加载'));
+        } else if (!result) {
+          reject(new PluginConnectionError('插件未响应'));
+        } else if (!result.ok) {
+          reject(new Error(result.error || '插件未完成操作'));
         } else {
           resolve(result);
         }
@@ -69,6 +74,8 @@ async function runChromeJob(nonce){
   if(!response.ok)throw Error((await response.json()).error||'无法更新本机导入状态');
  }
  let started=false;
+ let syncing=false;
+ let checkingReceipt=false;
  try{
   const response=await fetch(base);
   const job=await response.json();
@@ -92,25 +99,42 @@ async function runChromeJob(nonce){
   statusText.textContent='正在连接 Chrome 插件（'+job.profile+'）…';
   help.textContent='如尚未安装插件，请在此 Chrome 用户下安装或重新加载插件。连接成功后会自动继续。';
   let extensionId;
-  const deadline=Date.now()+600000;
+  const deadline=Date.now()+(job.batch ? 45000 : 600000);
   while(Date.now()<deadline){
    try{extensionId=await findLocalBridge();break;}
-   catch(e){await report('waiting',e.message);await new Promise(resolve=>setTimeout(resolve,8000));}
+   catch(e){await report('waiting',e.message);await pause(4000);}
   }
-  if(!extensionId)throw Error('等待插件超过 10 分钟，请安装后从本机账号管理重新同步。');
+  if(!extensionId)throw Error('未能连接插件，请在该 Chrome 用户中启用后重试。');
   const config=await pairPlugin(extensionId);
-  await pluginCommand(extensionId,{action:'sw_pair',config});
+  try {
+    await pluginCommand(extensionId,{action:'sw_pair',config});
+  } catch (error) {
+    if (error.message !== '本机连接组件无法处理请求，请重新连接。') throw error;
+    await pause(800);
+    await pluginCommand(extensionId,{action:'sw_pair',config});
+  }
   await report('running','插件已连接，正在同步并核对账号');
+  syncing=true;
   statusText.textContent='正在同步 Flow 登录并核对实际邮箱…';
   help.textContent='请保持此窗口打开，直到显示导入结果。';
-  const result=await pluginCommand(extensionId,{action:'sw_sync'},180000);
-  const message=result.message||'后台仍在核对，请在算力中心的任务队列查看。';
-  const confirmed=result.status==='confirmed' || (!result.status && message.startsWith('Ubuntu 登录核对成功：'));
-  await report(confirmed?'succeeded':'running',message);
-  showResult(message,confirmed);
+  const verifyUntil=Date.now()+35*60*1000;
+  do {
+    const result=await pluginCommand(extensionId,{action:'sw_sync'},180000);
+    const message=result.message||'Ubuntu 核对结果待确认。';
+    const confirmed=result.status==='confirmed' || (!result.status && message.startsWith('Ubuntu 登录核对成功：'));
+    await report(confirmed?'succeeded':'pending',message);
+    showResult(message,confirmed);
+    if (confirmed || result.status !== 'pending') return;
+    // The plugin retains this receipt and checks it again when it is pending.
+    checkingReceipt=true;
+    await pause(5000);
+  } while (Date.now()<verifyUntil);
  }catch(e){
-  showResult('本次同步未完成：'+e.message);
-  if(started)try{await report('failed',e.message);}catch{}
+  const pending=syncing && (e instanceof PluginConnectionError || /结果未确认|结果尚未确认|提交后连接中断/.test(e.message)
+    || (checkingReceipt && e.message === '本机连接组件无法处理请求，请重新连接。'));
+  const message=pending?'同步结果待确认，请查看算力中心的账号检查记录。':e.message;
+  showResult(message);
+  if(started)try{await report(pending?'pending':'failed',message);}catch{}
  }
 }
 
