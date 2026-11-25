@@ -26,6 +26,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlencode, urlsplit
 from urllib.request import HTTPCookieProcessor, HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
+from music_recovery import DATABASE as MUSIC_DATABASE, MUSIC_HOME
+
 
 ROOT = Path(__file__).resolve().parent
 FLOW_READINESS_LOCK = threading.Lock()
@@ -59,6 +61,7 @@ print(json.dumps({'added_dimensions':len(chosen)}))
 ALLOWED_STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    "/api-docs.js": ("api-docs.js", "text/javascript; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
 }
 
@@ -1259,8 +1262,10 @@ def request_host_shutdown():
 # the JSON body — there is no URL surface for callers to influence.
 MUSIC_API_HOST = '127.0.0.1'
 MUSIC_API_PORT = 8000
-MUSIC_API_CREDS = Path('/home/xiao/tools/FlowMusic2API/.env.sw-credentials')
+MUSIC_API_CREDS = MUSIC_HOME / '.env.sw-credentials'
 MUSIC_MODELS = {'lyria', 'lyria-fast', 'lyria-pro', 'lyria-pro-fast'}
+MUSIC_GENERATION_PATH = '/v1/audio/generations'
+MUSIC_PRIORITY_PATH = MUSIC_GENERATION_PATH + '/priority'
 
 
 def music_call(method, path, *, body=None, token=None, timeout=30):
@@ -1374,6 +1379,24 @@ def music_account_order(official, items):
     return list(dict.fromkeys(names[key] for key in official.priority_order(list(names))))
 
 
+def music_order_supported():
+    """Check the local router before choosing the endpoint for the only POST."""
+    connection = http.client.HTTPConnection(MUSIC_API_HOST, MUSIC_API_PORT, timeout=3)
+    try:
+        connection.request('GET', MUSIC_PRIORITY_PATH)
+        response = connection.getresponse()
+        allowed = {method.strip().upper() for method in (response.getheader('Allow') or '').split(',')}
+        if response.status == 405 and 'POST' in allowed:
+            return True
+        if response.status == 404:
+            return False
+    except (OSError, http.client.HTTPException):
+        pass
+    finally:
+        connection.close()
+    raise ValueError('无法核对音乐服务的派发接口，本次尚未提交。')
+
+
 def music_generate(prompt, model, *, account_order=None):
     if not isinstance(prompt, str):
         raise ValueError('请填写音乐描述。')
@@ -1391,10 +1414,10 @@ def music_generate(prompt, model, *, account_order=None):
     if not key:
         raise ValueError('音乐服务未配置（缺少 FlowMusic2API 凭据）。')
     # The upstream call blocks until the song finishes (usually 1-3 minutes).
-    path = '/v1/audio/generations'
+    path = MUSIC_GENERATION_PATH
     body = {'model': model, 'prompt': prompt}
-    if account_order is not None:
-        path += '/priority'
+    if account_order is not None and music_order_supported():
+        path = MUSIC_PRIORITY_PATH
         body['account_order'] = account_order
     result = music_call('POST', path, body=body,
                         token=key, timeout=660)
@@ -1440,8 +1463,7 @@ def make_handler(sources, deployment="local", coordinator=None, real_pool=None, 
     def music_busy():
         if real_pool and real_pool.maintenance():
             return True
-        path = Path('/home/xiao/tools/FlowMusic2API/data/flowmusic2api.db')
-        with closing(sqlite3.connect('file:' + str(path) + '?mode=ro', uri=True)) as db:
+        with closing(sqlite3.connect(MUSIC_DATABASE.as_uri() + '?mode=ro', uri=True)) as db:
             if db.execute('SELECT 1 FROM request_logs WHERE status_code=102 LIMIT 1').fetchone():
                 return True
         jobs = Path.home()/'.local/state/creative-unified-workbench/music-jobs.sqlite3'
@@ -1777,7 +1799,9 @@ def make_handler(sources, deployment="local", coordinator=None, real_pool=None, 
                 except (ValueError, OSError, URLError):
                     return self.json_response(503, {'error': '素材信息暂不可读取。'})
             if self.path == "/api/health":
-                result = {"application": "unified-workbench", "version": 1, "deployment": deployment, "request_policy": {"retry_policy":["never"], "scope":"request", "version":1}}
+                result = {"application": "unified-workbench", "version": 1, "deployment": deployment,
+                          "source_version": os.getenv('SW_SOURCE_VERSION'), "source_commit": os.getenv('SW_SOURCE_COMMIT'),
+                          "request_policy": {"retry_policy":["never"], "scope":"request", "version":1}}
             elif self.path == "/api/status":
                 result = sources.status()
                 if real_pool:

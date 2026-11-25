@@ -9,7 +9,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 ROOT = Path(__file__).resolve().parent
 SCRIPT = ROOT / 'flow-manager/chrome_manager.py'
-LEGACY = Path(r'D:\FLOW API\flow2api-token-updater-original-20261029')
+LEGACY = Path(os.environ.get('STUDIOWRIGHT_LEGACY_EXTENSION') or r'D:\FLOW API\flow2api-token-updater-original-20261029').expanduser()
 OLD_ID = 'kbnibljeinmjmmpholicjkaiehmilbbk'
 
 

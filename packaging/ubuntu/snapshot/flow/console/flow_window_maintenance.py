@@ -40,9 +40,9 @@ def gate(account,*,manual=False,now=None):
     return None
 
 async def safe_pointer(page,target,driver,*,checkpoint,rng):
-    from portal_pointer_client import PortalPointer
+    from input_backend import open_pointer
     from pointer_sequence import focus_path
-    pointer=PortalPointer(target,gui_environment=driver.env)
+    pointer=open_pointer(target,gui_environment=driver.env)
     await pointer.ensure_ready(timeout=2)
     await checkpoint()
     await page.evaluate('''()=>{window.__swIdleMove=null;window.__swIdleHandler=e=>{

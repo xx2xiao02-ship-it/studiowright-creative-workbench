@@ -40,6 +40,7 @@ KINDS = {"sync", "login", "media", "doctor", "quote", "image", "video"}
 TERMINAL_INPUT_STOPS = frozenset(('pasted_text_mismatch', 'prompt_input_timeout'))
 RETRYABLE_INPUT_STOPS = frozenset(('pre_submit_failed:pointer_not_over_input', 'pre_submit_failed:desktop_keyboard_authorization_timeout', 'window_focus_lost', 'composer_unavailable', 'window_activation_unconfirmed'))
 WAITING_FOR_PROXY = '等待已确认空闲的专属代理。分配后，原同步任务会自动继续核对。'
+BRIDGE_ID = 'kbnibljeinmjmmpholicjkaiehmilbbk'
 BALANCE_SWEEP_SECONDS = 300
 BALANCE_RETRY_DELAYS = (10, 25)
 
@@ -796,7 +797,9 @@ def create_app(root, adapter, test=False):
         return FileResponse(HERE / "static/remote.html")
 
     async def health(request):
-        return JSONResponse({"ok": True, "application": "studiowright-console", "test": test})
+        return JSONResponse({"ok": True, "application": "studiowright-console", "test": test,
+                             "bridge_id": BRIDGE_ID, "source_version": os.getenv('SW_SOURCE_VERSION'),
+                             "source_commit": os.getenv('SW_SOURCE_COMMIT')}, headers={"Cache-Control": "no-store"})
 
     async def payload(request, *, allow_empty=False):
         limit = 524288 if request.url.path.endswith("/session") else 32768
@@ -888,8 +891,8 @@ def create_app(root, adapter, test=False):
                 "retry_projects": c.store.retry_projects(),
                 "tasks": tasks,
                 "models": adapter.models,
-                "source_version": "0.2.12",
-                "source_commit": "df9f5fa",
+                "source_version": os.getenv('SW_SOURCE_VERSION'),
+                "source_commit": os.getenv('SW_SOURCE_COMMIT'),
                 "console_api_version": "2026-10-31.account-insights.1",
                 "remote_login_ready": c.remote.supported(),
                 "remote_logins": [c.remote.public(s) for s in c.remote.sessions.values()],
@@ -1309,7 +1312,7 @@ def create_app(root, adapter, test=False):
             {
                 "apiUrl": "http://127.0.0.1:18888/api/plugin/session",
                 "connectionToken": token,
-                "extensionId": "kbnibljeinmjmmpholicjkaiehmilbbk",
+                "extensionId": BRIDGE_ID,
             }
         )
 
@@ -1576,6 +1579,8 @@ def create_app(root, adapter, test=False):
             "testserver",
         }:
             return JSONResponse({"error": "不允许的访问地址。"}, status_code=403)
+        if request.method == "GET" and request.url.path == "/health" and request.headers.get("x-studiowright-probe") == "1":
+            return await call_next(request)
         plugin_path = request.url.path == "/api/plugin/session" or request.url.path.startswith(
             "/api/plugin/session/"
         )
@@ -1603,7 +1608,7 @@ def create_app(root, adapter, test=False):
                 origin
                 and origin != "http://" + host
                 and not (
-                    plugin_auth and origin == "chrome-extension://kbnibljeinmjmmpholicjkaiehmilbbk"
+                    plugin_auth and origin == "chrome-extension://" + BRIDGE_ID
                 )
             ):
                 return JSONResponse({"error": "请从后台页面发起操作。"}, status_code=403)

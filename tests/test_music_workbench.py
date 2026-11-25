@@ -2,6 +2,7 @@ import ast
 from contextlib import closing
 from decimal import Decimal
 import hashlib
+import http.client
 import json
 import math
 import sqlite3
@@ -17,9 +18,12 @@ SOURCE=Path(__file__).resolve().parents[1]/'packaging/ubuntu/snapshot/workbench/
 
 def functions():
     tree=ast.parse(SOURCE.read_text(encoding='utf-8'))
-    selected=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('music_generate','music_service_status','music_account_order','music_credit_summary')]
+    selected=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('music_generate','music_service_status','music_account_order','music_credit_summary','music_order_supported')]
     scope={'time':time,'re':re,'Decimal':Decimal,'hashlib':hashlib,'json':json,'math':math,'sqlite3':sqlite3,'closing':closing,'MUSIC_MODELS':{'lyria-fast'},'music_credentials':lambda:('user','password','test-key'),
-           'music_admin_token':lambda:'test-admin','music_call':Mock()}
+           'music_admin_token':lambda:'test-admin','music_call':Mock(),
+           'MUSIC_GENERATION_PATH':'/v1/audio/generations', 'MUSIC_PRIORITY_PATH':'/v1/audio/generations/priority',
+           'MUSIC_API_HOST':'127.0.0.1', 'MUSIC_API_PORT':8000,
+           'http':SimpleNamespace(client=SimpleNamespace(HTTPConnection=Mock(), HTTPException=http.client.HTTPException))}
     exec(compile(ast.Module(body=selected,type_ignores=[]),str(SOURCE),'exec'),scope)
     return scope
 
@@ -65,6 +69,8 @@ class MusicWorkbench(unittest.TestCase):
 
     def test_shared_order_uses_the_priority_service_route_and_keeps_music_only_members(self):
         s=functions()
+        connection=s['http'].client.HTTPConnection.return_value
+        connection.getresponse.return_value=SimpleNamespace(status=405,getheader=lambda name:'POST')
         a,b='a'*64,'b'*64
         items=[{'key':'flow-account-'+a,'email':'A@example.test'},
                {'key':'flow-account-'+b,'email':'b@example.test','gemini_removed':True}]
@@ -74,3 +80,31 @@ class MusicWorkbench(unittest.TestCase):
         s['music_call'].assert_called_once_with('POST','/v1/audio/generations/priority',
             body={'model':'lyria-fast','prompt':'prompt','account_order':['b@example.test','a@example.test']},
             token='test-key',timeout=660)
+        connection.request.assert_called_once_with('GET','/v1/audio/generations/priority')
+        connection.close.assert_called_once()
+
+    def test_legacy_music_route_still_submits_exactly_once(self):
+        s=functions()
+        connection=s['http'].client.HTTPConnection.return_value
+        connection.getresponse.return_value=SimpleNamespace(status=404,getheader=lambda name:None)
+        s['music_call'].return_value={'data':[{'id':'clip','audio':{'url':'https://example.test/a'}}]}
+        s['music_generate']('prompt','lyria-fast',account_order=['a@example.test'])
+        s['music_call'].assert_called_once_with('POST','/v1/audio/generations',
+            body={'model':'lyria-fast','prompt':'prompt'},token='test-key',timeout=660)
+
+    def test_unknown_route_state_does_not_submit(self):
+        s=functions()
+        connection=s['http'].client.HTTPConnection.return_value
+        connection.getresponse.side_effect=TimeoutError
+        with self.assertRaisesRegex(ValueError,'尚未提交'):
+            s['music_generate']('prompt','lyria-fast',account_order=[])
+        s['music_call'].assert_not_called()
+
+    def test_failed_priority_post_never_retries_the_old_route(self):
+        s=functions()
+        connection=s['http'].client.HTTPConnection.return_value
+        connection.getresponse.return_value=SimpleNamespace(status=405,getheader=lambda name:'POST')
+        s['music_call'].side_effect=TimeoutError
+        with self.assertRaises(TimeoutError):
+            s['music_generate']('prompt','lyria-fast',account_order=[])
+        s['music_call'].assert_called_once()

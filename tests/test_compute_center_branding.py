@@ -6,11 +6,12 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCT_FILES = (
     ROOT / 'packaging/ubuntu/snapshot/workbench/index.html',
-    ROOT / 'packaging/ubuntu/snapshot/workbench/app.js',
+    ROOT / 'packaging/ubuntu/snapshot/workbench/api-docs.js',
     ROOT / 'packaging/ubuntu/snapshot/flow/console/static/api.html',
     ROOT / 'packaging/windows/client/Desktop.cs',
     ROOT / 'packaging/windows/client/Setup.cs',
     ROOT / 'packaging/windows/client-payload/reuse_existing.py',
+    ROOT / 'packaging/ubuntu/snapshot/workbench/app.js',
 )
 
 

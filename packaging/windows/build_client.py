@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import tempfile
 import zipfile
 from fetch_ssh import prepare
 
@@ -12,6 +13,19 @@ BASE = Path(__file__).resolve().parent
 PAYLOAD = BASE / 'client-payload'
 DIST = BASE / 'dist'
 CSC = Path(r'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe')
+
+
+def build_version():
+    repo = BASE.parents[1]
+    version_path = repo / 'VERSION'
+    version = version_path.read_text(encoding='utf-8').strip() if version_path.is_file() else ''
+    try:
+        if not subprocess.check_output(['git', '-C', str(repo), 'status', '--porcelain', '-uno', '--', 'VERSION', 'packaging/windows']):
+            commit = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', '--short=12', 'HEAD'], text=True).strip()
+            return f'{version} · {commit}' if version else commit
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    return version
 
 
 def main():
@@ -34,7 +48,13 @@ def main():
                        '/resource:' + str(BASE / 'studiowright.ico') + ',StudioWright.AppIcon.ico',
                        '/win32icon:' + str(BASE / 'studiowright.ico'), '/out:' + str(desktop),
                        str(BASE / 'client/Desktop.cs'), str(BASE / 'client/PanelSsh.cs')]
-    subprocess.run(compile_desktop, check=True)
+    DIST.mkdir(exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', suffix='.cs', dir=DIST, delete=False) as metadata:
+        metadata.write('[assembly: System.Reflection.AssemblyInformationalVersion(' + json.dumps(build_version()) + ')]')
+    try:
+        subprocess.run([*compile_desktop, metadata.name], check=True)
+    finally:
+        Path(metadata.name).unlink()
     (PAYLOAD / 'StudioWright.exe.config').write_bytes((BASE / 'client/StudioWright.exe.config').read_bytes())
     count = 0
     with zipfile.ZipFile(payload_zip, 'x', compression=zipfile.ZIP_DEFLATED, compresslevel=5) as zipf:
@@ -42,7 +62,6 @@ def main():
             if path.is_file() and not path.is_symlink() and '__pycache__' not in path.parts:
                 zipf.write(path, path.relative_to(PAYLOAD).as_posix())
                 count += 1
-    DIST.mkdir(exist_ok=True)
     output = DIST / 'StudioWright-Windows-Desktop-Setup.exe'
     if output.exists():
         raise SystemExit('客户端安装包已存在，已停止以避免覆盖。')

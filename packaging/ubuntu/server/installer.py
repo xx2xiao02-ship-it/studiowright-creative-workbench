@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import runpy
 import secrets
 import shutil
@@ -242,6 +243,13 @@ def new_install(home, keep_awake=False):
     pythonpath = flow / 'source/src'
     common = [('PYTHONPATH', os.pathsep.join(map(str, (pythonpath, work, flow / 'console')))), ('SW_ROOT', flow),
               ('PATH', str(flow / 'bin') + ':' + os.environ.get('PATH', '/usr/bin:/bin'))]
+    release_file = PACKAGE / 'release.json'
+    if release_file.is_file():
+        release = json.loads(release_file.read_text(encoding='utf-8'))
+        if re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,3}', release.get('version') or ''):
+            common.append(('SW_SOURCE_VERSION', release['version']))
+        if re.fullmatch(r'[0-9a-f]{40}', release.get('commit') or ''):
+            common.append(('SW_SOURCE_COMMIT', release['commit']))
     write_unit(units, UNITS[0], [flow_python, flow / 'console/server.py'], flow / 'console', common)
     write_unit(units, UNITS[1], [flow_python, '-B', work / 'server.py', '--port', '18920',
                                 '--flow-port', '18888', '--deployment', 'ubuntu'],

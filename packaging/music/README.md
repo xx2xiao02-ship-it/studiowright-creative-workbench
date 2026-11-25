@@ -52,4 +52,4 @@ python3 /path/to/workbench/packaging/music/apply_session_renewal.py /path/to/Flo
 go test ./...
 ```
 
-工作台通过新端点 `/v1/audio/generations/priority` 使用优先顺序。上线时先验证音乐镜像提供该端点，再切换工作台，原有音乐 API 入口继续沿用原逻辑。
+工作台在派发前探测 `/v1/audio/generations/priority`。识别到新版入口时发送账号顺序，旧服务继续走原生成接口。确认音乐镜像提供新版入口后再验收优先顺序。生成请求只提交一次，已经提交的任务按原记录查回结果。

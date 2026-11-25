@@ -16,12 +16,24 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 import webbrowser
 
 
-ROOT = Path(r'E:\google\unified-workbench')
+APP_DIR = Path(__file__).resolve().parent
+PROFILE_DIR = Path(os.environ.get('LOCALAPPDATA') or Path.home()) / 'StudioWrightDesktop'
 PORT = 18920
 FLOW_PORT = 18888
 API_PORT = 18922
-KEY_ALIAS = "xiao-system-product-name.local"
-CHROME_MANAGER = ROOT / "chrome_manager_bridge.py"
+CHROME_MANAGER = APP_DIR / 'manager_bridge.py'
+LEGACY_HOST_KEY_ALIAS = 'xiao-system-product-name.local'
+
+
+def target_connection_path():
+    configured = os.environ.get('STUDIOWRIGHT_WINDOWS_CONNECTION_FILE')
+    if configured:
+        return Path(configured).expanduser()
+    saved = PROFILE_DIR / 'ubuntu-connection.json'
+    if saved.is_file():
+        return saved
+    # Existing workstations can still read their previous address during migration.
+    return Path(r'E:\google\unified-workbench\ubuntu-connection.json')
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -93,13 +105,15 @@ def ensure_chrome_manager():
 def ssh_command(target, ssh_path=None, config_path=None, port=PORT):
     native_ssh = Path(os.environ.get('WINDIR', 'C:/Windows')) / 'System32/OpenSSH/ssh.exe'
     executable = ssh_path or (str(native_ssh) if os.name == 'nt' and native_ssh.is_file() else shutil.which("ssh"))
-    config = Path(config_path) if config_path else Path.home() / ".ssh" / "flow2api_ubuntu.conf"
+    configured = config_path or os.environ.get('STUDIOWRIGHT_SSH_CONFIG')
+    config = Path(configured or Path.home() / '.ssh/flow2api_ubuntu.conf').expanduser()
     if not executable or not config.is_file():
         raise RuntimeError("找不到已有的 SSH 连接环境。")
     if port not in (PORT, FLOW_PORT, API_PORT):
         raise ValueError("不支持的本机端口。")
-    return [executable, "-N", "-T", "-F", str(config), "-o", f"HostName={target}",
-            "-o", f"HostKeyAlias={KEY_ALIAS}", "-o", "BatchMode=yes",
+    legacy_identity = [] if configured else ['-o', f'HostKeyAlias={LEGACY_HOST_KEY_ALIAS}']
+    return [executable, "-N", "-T", "-F", str(config), "-o", f"HostName={target}", *legacy_identity,
+            "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no",
             "-o", "ExitOnForwardFailure=yes", "-o", "ConnectTimeout=8",
             "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
@@ -135,7 +149,7 @@ def ensure_flow_console():
     """Keep the existing Flow service intact and expose it only on local loopback."""
     if flow_console_health():
         return True
-    target = read_target(ROOT / 'ubuntu-connection.json')
+    target = read_target(target_connection_path())
     options = {'stdin': subprocess.DEVNULL, 'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL}
     if os.name == 'nt':
         options['creationflags'] = subprocess.CREATE_NO_WINDOW
@@ -173,7 +187,7 @@ def ensure_unified_api():
         probe.settimeout(1)
         if probe.connect_ex(('127.0.0.1', API_PORT)) == 0:
             return False
-    target = read_target(ROOT / 'ubuntu-connection.json')
+    target = read_target(target_connection_path())
     options = {'stdin': subprocess.DEVNULL, 'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL}
     if os.name == 'nt':
         options['creationflags'] = subprocess.CREATE_NO_WINDOW
@@ -193,11 +207,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
-    if os.name == 'nt' and not ensure_chrome_manager():
-        print('本机 Chrome 账号管理暂时无法启动；算力中心仍可继续使用。', file=sys.stderr)
     process = None
     if not health():
-        target = read_target(ROOT / "ubuntu-connection.json")
+        target = read_target(target_connection_path())
         options = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
         if os.name == "nt":
             options["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -227,6 +239,8 @@ def main():
             print('统一 API 入口暂不可用；算力中心仍可继续使用。', file=sys.stderr)
     except (OSError, RuntimeError, ValueError, KeyError):
         print('统一 API 入口暂不可用；算力中心仍可继续使用。', file=sys.stderr)
+    if os.name == 'nt' and not ensure_chrome_manager():
+        print('本机 Chrome 账号管理暂时无法启动；算力中心仍可继续使用。', file=sys.stderr)
     if args.no_browser:
         if process is not None:
             print(f"STARTED_PID={process.pid}")

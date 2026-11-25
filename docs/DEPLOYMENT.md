@@ -168,7 +168,7 @@ Gemini 网络检查使用 Ubuntu GNOME 的 HTTPS 代理设置。出现「连不�
 
 音乐需要单独部署 FlowMusic2API。基线、续期和优先派发补丁见 [音乐部署说明](../packaging/music/README.md)。在隔离源码上验证补丁并运行 `go test ./...`，再部署容器。配置本机端口和数据卷，逐个接入已授权的音乐账号。
 
-工作台从私有文件读取 `FLOWMUSIC_ADMIN_USER`、`FLOWMUSIC_ADMIN_PASSWORD` 和 `FLOWMUSIC_DEFAULT_API_KEY`。现有代码带有主机专用的凭据及数据库路径。迁移到其他用户名或目录时，在部署前核对 [`server.py`](../packaging/ubuntu/snapshot/workbench/server.py) 中的路径与新主机布局。保留音乐会话、数据库和素材卷的独立备份。音乐优先派发需要新版后台提供 `/v1/audio/generations/priority`。
+工作台从私有 `.env.sw-credentials` 文件读取 `FLOWMUSIC_ADMIN_USER`、`FLOWMUSIC_ADMIN_PASSWORD` 和 `FLOWMUSIC_DEFAULT_API_KEY`。音乐服务目录默认为当前用户的 `~/tools/FlowMusic2API`。其他目录通过工作台服务环境的 `STUDIOWRIGHT_MUSIC_HOME` 指定。保留音乐会话、数据库和素材卷的独立备份。工作台先探测音乐服务是否提供 `/v1/audio/generations/priority`。旧后台仍可按原顺序生成，支持新接口的后台按账号池顺序派发。
 
 工作台的 API 密钥从面板的密钥管理生成。调用方在本机用环境变量 `STUDIOWRIGHT_API_KEY` 保存密钥，按 [统一 API 说明](API.md) 发请求。超时后用原请求编号查询，等待已有任务的最终结果。
 
@@ -246,3 +246,29 @@ Get-FileHash -Algorithm SHA256 'packaging/windows/dist/StudioWright-Windows-Desk
 运行目录还有历史运维工具。独立调度服务及备份定时器、主机代理、账号授权、音乐部署参数和已有素材不由基础安装器一起恢复。线上升级前先核对待更新模块，保留已部署文件、服务配置和状态备份。运行中任务自然完成后再切换。优先在隔离环境通过安装和业务验收，再安排线上更新。
 
 备份时记录目标提交、安装包指纹、受影响服务、各运行目录以及外部素材卷位置。SQLite 使用一致性备份，或在服务安全停机后备份相关数据。SSH 私钥、Google 授权与 API 密钥存放在受控的主机或加密备份中。回退使用同一版本的程序、配置和兼容状态备份，再重做第 5 节的检查。
+
+### 现有 Ubuntu 按服务更新
+
+从已确认的 Git 提交取出 `VERSION` 和 `packaging/ubuntu/`，在 Ubuntu 用运行原服务的用户操作。现有工作站继续使用与当前账号助手匹配的快照。源码快照沿用旧版账号助手身份，全新安装包使用随安装包发布的账号助手身份，两种部署各自核对。
+
+先核对目标程序和变更范围，每次选择一个服务组。先验证 Flow，再更新工作台及统一 API。命令中的 `git rev-parse HEAD` 在对应 Git 副本中运行。独立调度和音乐容器保留在各自的发布流程中。
+
+```bash
+python3 -B packaging/ubuntu/build_server.py --check-snapshot
+python3 -B packaging/ubuntu/deploy_release.py plan flow packaging/ubuntu/snapshot
+python3 -B packaging/ubuntu/deploy_release.py apply flow packaging/ubuntu/snapshot \
+  --commit "$(git rev-parse HEAD)" --version "$(cat VERSION)"
+python3 -B packaging/ubuntu/deploy_release.py plan workbench packaging/ubuntu/snapshot
+python3 -B packaging/ubuntu/deploy_release.py apply workbench packaging/ubuntu/snapshot \
+  --commit "$(git rev-parse HEAD)" --version "$(cat VERSION)"
+```
+
+更新前确认兼容性及业务验收。工具会备份受影响的程序、服务版本配置及状态数据库，等待进行中的任务自然完成，随后只重启对应服务，核对健康接口中的 `source_commit`。回退目录在执行时打印。发现需要回退时，用下列命令恢复该组程序和服务版本配置。状态数据库备份用于恢复核对，恢复前先确认此后新写入的任务和结果。
+
+```bash
+python3 -B packaging/ubuntu/deploy_release.py rollback /path/to/deployment-backup
+```
+
+### Windows 密钥连接配置
+
+在 `%LOCALAPPDATA%\StudioWrightDesktop\ubuntu-connection.json` 保存 `{"host":"Ubuntu 内网 IPv4 地址"}`，或通过 `STUDIOWRIGHT_WINDOWS_CONNECTION_FILE` 指定文件。通过 `STUDIOWRIGHT_SSH_CONFIG` 指定包含 `Host flow-ubuntu` 的 OpenSSH 配置，使用已有私钥和已核验的主机指纹。自定义配置由 OpenSSH 读取端口、用户、密钥及 `HostKeyAlias`。已有工作站的旧连接配置仍可读取。Windows 窗口标题显示构建版本，Ubuntu 页面版本旁可查服务提交。

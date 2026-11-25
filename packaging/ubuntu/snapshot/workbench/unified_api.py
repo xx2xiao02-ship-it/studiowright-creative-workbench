@@ -68,7 +68,9 @@ def handler_for(store, upstream_port=18920, flow_port=18888):
             if (len(self.headers.get_all('Host', [])) != 1 or self.headers.get('Host', '').lower() not in (f'127.0.0.1:{self.server.server_port}', f'localhost:{self.server.server_port}') or self.headers.get('Origin')):
                 return self.error_json(403, '请从可信本机程序调用。')
             if self.command == 'GET' and self.path == '/health':
-                data = b'{"application":"studiowright-unified-api","ok":true}'
+                data = json.dumps({'application': 'studiowright-unified-api', 'ok': True,
+                                   'source_version': os.getenv('SW_SOURCE_VERSION'),
+                                   'source_commit': os.getenv('SW_SOURCE_COMMIT')}).encode()
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
                 self.send_header('Content-Length', str(len(data)))

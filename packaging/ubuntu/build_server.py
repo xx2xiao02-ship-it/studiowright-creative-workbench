@@ -92,7 +92,7 @@ def replace_exact(path, before, after, count, already=()):
     path.write_text(text.replace(before, after), encoding='utf-8')
 
 
-def build(STAGE, archive, output):
+def build(STAGE, archive, output, release=None):
     extension = json.loads((BASE / 'client-extension.json').read_text(encoding='utf-8'))['id']
     if len(extension) != 32 or any(c not in 'abcdefghijklmnop' for c in extension):
         raise RuntimeError('插件身份格式不正确。')
@@ -100,11 +100,13 @@ def build(STAGE, archive, output):
     shutil.copyfile(BASE / 'server/installer.py', STAGE / 'installer.py')
     shutil.copyfile(BASE / 'server/discovery.py', STAGE / 'discovery.py')
     shutil.copyfile(BASE / 'server/discovery_install.py', STAGE / 'discovery_install.py')
+    if release:
+        (STAGE / 'release.json').write_text(json.dumps(release), encoding='utf-8')
     verify_snapshot(BASE / 'snapshot', STAGE / 'snapshot')
     shutil.copytree(BASE / 'wheelhouse-linux', STAGE / 'wheels')
     server = STAGE / 'snapshot/flow/console/server.py'
     app = STAGE / 'snapshot/flow/console/static/app.js'
-    replace_exact(server, OLD_ID, extension, 2)
+    replace_exact(server, OLD_ID, extension, 1)
     replace_exact(app, OLD_ID, extension, 1)
     replace_exact(app, 'Flow2API 插件', 'StudioWright 账号助手', 4)
     replace_exact(app, '请安装或重新加载 1.4.2', '请安装或重新加载账号助手', 1)
@@ -130,15 +132,6 @@ def build(STAGE, archive, output):
     retry_before = retry if retry in app_text else retry_current if retry_current in app_text else None
     if retry_before is not None:
         replace_exact(app, retry_before, single, 1)
-    replace_exact(server,
-                  'return JSONResponse({"ok": True, "application": "studiowright-console", "test": test})',
-                  'return JSONResponse({"ok": True, "application": "studiowright-console", "test": test, "bridge_id": "' + extension + '"})',
-                  1)
-    replace_exact(server,
-                  '        plugin_path = request.url.path == "/api/plugin/session" or request.url.path.startswith(\n',
-                  '        if request.method == "GET" and request.url.path == "/health" and request.headers.get("x-studiowright-probe") == "1":\n'
-                  '            return await call_next(request)\n'
-                  '        plugin_path = request.url.path == "/api/plugin/session" or request.url.path.startswith(\n', 1)
     original_manifest = STAGE / 'snapshot/snapshot-manifest.json'
     captured = json.loads(original_manifest.read_text(encoding='utf-8'))
     for changed in ('flow/console/server.py', 'flow/console/static/app.js'):
@@ -202,12 +195,19 @@ def main():
         return
     DIST.mkdir(exist_ok=True)
     version = (BASE.parents[1] / 'VERSION').read_text(encoding='utf-8').strip()
+    release = {'version': version, 'commit': None}
+    try:
+        repo = BASE.parents[1]
+        if not subprocess.check_output(['git', '-C', str(repo), 'status', '--porcelain', '-uno', '--', 'VERSION', 'packaging/ubuntu']):
+            release['commit'] = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
+    except (OSError, subprocess.CalledProcessError):
+        pass  # A standalone snapshot may not have Git metadata.
     output = DIST / f'StudioWright-Ubuntu-24.04-Setup-{version}.run'
     if output.exists():
         raise SystemExit(f'安装包已存在，未覆盖：{output}')
     with tempfile.TemporaryDirectory(prefix='studiowright-build-', dir=DIST) as directory:
         temp = Path(directory)
-        build(temp / 'payload', temp / 'payload.tar.gz', output)
+        build(temp / 'payload', temp / 'payload.tar.gz', output, release)
 
 
 if __name__ == '__main__':

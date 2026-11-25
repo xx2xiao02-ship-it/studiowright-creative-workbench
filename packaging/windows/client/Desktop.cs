@@ -7,6 +7,7 @@ using System.Linq;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -25,6 +26,14 @@ namespace StudioWrightDesktop
         public static readonly string ProfileDir = Path.Combine(DataDir, "WebView2");
         public const int DiscoveryPort = 18925;
         public const string Workbench = "http://127.0.0.1:18920/";
+
+        public static string VersionLabel()
+        {
+            var version = (AssemblyInformationalVersionAttribute)Attribute.GetCustomAttribute(
+                typeof(Program).Assembly, typeof(AssemblyInformationalVersionAttribute));
+            return version == null || String.IsNullOrEmpty(version.InformationalVersion)
+                ? "" : " · " + version.InformationalVersion;
+        }
 
         public static Icon BrandIcon(int size)
         {
@@ -245,10 +254,9 @@ namespace StudioWrightDesktop
 
         public static bool TryReuseConfiguredConnection()
         {
-            string legacy=@"E:\google\unified-workbench\open_ubuntu.py";
             string python=Path.Combine(Program.AppDir,@"runtime\python.exe");
             string script=Path.Combine(Program.AppDir,"reuse_existing.py");
-            if (!File.Exists(legacy) || !File.Exists(python) || !File.Exists(script)) return false;
+            if (!File.Exists(python) || !File.Exists(script)) return false;
             try {
                 var start=new ProcessStartInfo(python,"-B \"" + script + "\" --no-browser");
                 start.UseShellExecute=false;start.CreateNoWindow=true;start.WorkingDirectory=Program.AppDir;
@@ -410,7 +418,7 @@ namespace StudioWrightDesktop
 
         public DesktopWindow()
         {
-            Text="算力中心"; Width=1380; Height=920; MinimumSize=new Size(800,560); StartPosition=FormStartPosition.CenterScreen;
+            Text="算力中心" + Program.VersionLabel(); Width=1380; Height=920; MinimumSize=new Size(800,560); StartPosition=FormStartPosition.CenterScreen;
             Icon=Program.BrandIcon(32);
             var bar=new StatusStrip(); var reconnect=new ToolStripDropDownButton("连接");
             reconnect.DropDownItems.Add("重新连接 Ubuntu",null,delegate { OpenConnection(); });

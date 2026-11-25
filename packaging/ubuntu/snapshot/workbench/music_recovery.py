@@ -2,14 +2,16 @@
 from contextlib import closing
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import sqlite3
 
-DATABASE=Path('/home/xiao/tools/FlowMusic2API/data/flowmusic2api.db')
+MUSIC_HOME = Path(os.environ.get('STUDIOWRIGHT_MUSIC_HOME') or Path.home() / 'tools/FlowMusic2API').expanduser().resolve()
+DATABASE = MUSIC_HOME / 'data/flowmusic2api.db'
 
 def recover(row, database=DATABASE):
     if not database.is_file():return None
-    with closing(sqlite3.connect('file:'+str(database)+'?mode=ro',uri=True)) as db:
+    with closing(sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True)) as db:
         db.row_factory=sqlite3.Row
         logs=db.execute("SELECT id,request_body,response_body,status_code,created_at FROM request_logs WHERE operation='music.generate' ORDER BY id DESC").fetchall()
     matches=[]
