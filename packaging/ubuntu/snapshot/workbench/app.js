@@ -296,6 +296,11 @@ function flowAccountReason(account, snapshot, row, pageState) {
   if (!row?.review && !account.flow_risk_paused && !account.flow_cooling) {
     const needsProject = ['binding','unique','project'].includes(page)
       || (!page && row?.issues?.some(issue => issue.key === 'flow_binding'));
+    if (needsProject && account.flow_login === 'verified' && snapshot?.flow_state?.available === true
+        && !snapshot.projects?.some(project => project.source_profile === account.profile))
+      return {label:'等待准备 Flow 项目',
+        text:'登录已核对。点击「Flow 一键就绪」检查这个账号的项目，确认没有项目时会新建并绑定。',
+        showOnCard:true,noScreenshot:true};
     if (needsProject) return {label:'请打开原 Flow 项目',
       text:'在这个账号的 Ubuntu 浏览器打开原 Flow 项目。如果 Google 显示登录页，请用这个账号重新登录。完成后点「Flow 一键就绪」。',
       showOnCard:true,noScreenshot:true};
@@ -1543,7 +1548,7 @@ let governanceService = 'gemini', governanceCases = null, governanceRead = null,
 let governanceError = '';
 const governanceAudits = {flow:null,gemini:null};
 const governanceAuditLabels = {ready:'可立即派发',queue:'需排队',blocked:'暂不可用',unknown:'待确认'};
-const flowRecoveryLabels = {rebind:'重新绑定原窗口',open_project:'进入原账号项目',return_to_project:'尝试返回原任务页',reload:'刷新原页面',restart:'重启该账号浏览器',dismiss_update:'关闭 Flow 更新提示',dismiss_account_panel:'关闭 Flow 账号面板',release_review:'已核对原任务，解除限制',close_duplicate:'关闭同项目空副本',recheck_window:'复查原固定任务页'};
+const flowRecoveryLabels = {prepare_project:'准备该账号的项目',rebind:'重新绑定原窗口',open_project:'进入原账号项目',return_to_project:'尝试返回原任务页',reload:'刷新原页面',restart:'重启该账号浏览器',dismiss_update:'关闭 Flow 更新提示',dismiss_account_panel:'关闭 Flow 账号面板',release_review:'已核对原任务，解除限制',close_duplicate:'关闭同项目空副本',recheck_window:'复查原固定任务页'};
 
 function flowOccupiedSlots(dispatch) {
   return dispatch?.occupied_slots ?? dispatch?.active;
@@ -1601,6 +1606,7 @@ function auditFlowAccounts(snapshot, dispatch, pageChecks, probeStartedAt) {
       status==='unknown' ? (busy ? '任务处理中，尚未确认 Flow 已接收。' : '实际页面或派发服务尚未核对通过。') : '';
     if (status==='ready' && (dispatch.paused || busy || flowOccupiedSlots(dispatch)>=dispatch.maximum)) note+=' 新任务可接收，等调度放行或空出名额。';
     if (history.length) note+=` 本轮处理：${history.join('、')}。${status==='ready' ? '复查通过。' : '复查未通过。'}`;
+    if (repair?.note) note+=` ${repair.note}`;
     return {account,status,page,evidence,review,issues:blocked,note};
   });
 }

@@ -1277,14 +1277,15 @@ class RealPool:
         encoded = json.dumps(['flow', profile, project], ensure_ascii=False, separators=(',', ':')).encode()
         return 'flow-project-' + hashlib.sha256(encoded).hexdigest()
 
-    def _create_flow_project(self, profile):
+    def _create_flow_project(self, profile, *, readiness=False):
         pid = subprocess.check_output(['systemctl', '--user', 'show', 'studiowright-console.service',
                                        '--property=MainPID', '--value'], text=True, timeout=5).strip()
         if not pid.isdigit() or pid == '0':
             raise RuntimeError('Flow 后台不可用。')
         python = os.fsdecode(Path('/proc', pid, 'cmdline').read_bytes().split(b'\0')[0])
         process = subprocess.run([python, '-B', str(self.program_dir / 'create_flow_project.py')],
-                                 input=json.dumps({'profile': profile}).encode(), capture_output=True, timeout=100)
+                                 input=json.dumps({'profile': profile, 'readiness': readiness}).encode(),
+                                 capture_output=True, timeout=100)
         if process.returncode or len(process.stdout) > 4096:
             raise RuntimeError('创建项目的结果未确认。')
         result = json.loads(process.stdout)
@@ -1375,6 +1376,25 @@ class RealPool:
             return rows[0]
         if owned:
             raise Conflict('此账号现有项目的归属或编号无法确认，暂不新建或改用其他账号。')
+        return self._provision_flow_project(profile, unique[profile].get('email'), request_id, intent)
+
+    def prepare_readiness_project(self, account):
+        profile, email = account['profile'], account['email']
+        with self.connection() as db:
+            previous = db.execute('SELECT status,project FROM flow_auto_projects WHERE profile=?', (profile,)).fetchone()
+        if previous:
+            if previous['status'] != 'created':
+                raise Conflict('项目创建结果待核对。')
+            project_id = previous['project']
+            try:
+                self._register_flow_project(profile, project_id, email)
+            except (OSError, ValueError, RuntimeError):
+                raise Conflict('项目已创建，登记结果待核对。') from None
+            return project_id
+        request_id = 'readiness-' + hashlib.sha256(profile.encode()).hexdigest()
+        return self._provision_flow_project(profile, email, request_id, request_id, readiness=True)['source_id']
+
+    def _provision_flow_project(self, profile, email, request_id, intent, *, readiness=False):
         with self.connection() as db:
             db.execute('BEGIN IMMEDIATE')
             if self.maintenance():
@@ -1388,7 +1408,7 @@ class RealPool:
                        (profile, request_id, intent, time.time()))
             db.execute('COMMIT')
         try:
-            project_id = self._create_flow_project(profile)
+            project_id = self._create_flow_project(profile, readiness=True) if readiness else self._create_flow_project(profile)
         except ProjectNotStarted:
             with self.connection() as db:
                 db.execute("DELETE FROM flow_auto_projects WHERE request_id=? AND status='creating'", (request_id,))
@@ -1401,7 +1421,7 @@ class RealPool:
             db.execute("UPDATE flow_auto_projects SET status='created',project=?,updated=? WHERE request_id=?",
                        (project_id, time.time(), request_id))
         try:
-            self._register_flow_project(profile, project_id, unique[profile].get('email'))
+            self._register_flow_project(profile, project_id, email)
         except Exception:
             raise Conflict('项目已创建，但登记结果待核对；不会重复创建。') from None
         return {'key': self.flow_project_key(profile, project_id), 'source_profile': profile, 'source_id': project_id}

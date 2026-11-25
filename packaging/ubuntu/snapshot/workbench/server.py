@@ -966,7 +966,7 @@ class Sources:
         return {"checked_at": time.time(), "flow_state": {"available": True, "skipped_tasks": len(state['tasks']) - len(tasks)},
                 "tasks": tasks, "flow_coordination": state.get('coordination'), "real_accounts": {"items": accounts or []}}, None
 
-    def flow_readiness(self, repair=False, manual_review=None, automatic=False):
+    def flow_readiness(self, repair=False, manual_review=None, automatic=False, account_key=None, prepare_project=None):
         """Read current pages; only the explicit POST may repair or release a hold."""
         from flow_readiness_recovery import generation_evidence, operator_dispatch_paused
         state, _ = self.read("flow", "/api/state")
@@ -990,6 +990,10 @@ class Sources:
                                                and a['flow_pacing_known'] and not a['flow_cooling'])}
                                for a in accounts if a.get('email') and not a.get('flow_removed')],
                    'bindings': coordination.get('window_bindings', []), 'busy': sorted(p for p in busy if p)}
+        if account_key is not None:
+            payload['accounts'] = [account for account in payload['accounts'] if account['key'] == account_key]
+            if len(payload['accounts']) != 1:
+                raise ValueError('flow_account_unavailable')
         helper = ROOT/'flow_check_readiness.py'
         if helper.is_symlink() or not helper.is_file():
             raise ValueError('readiness_helper_unavailable')
@@ -1023,6 +1027,17 @@ class Sources:
                 if not isinstance(before_checks, dict):
                     raise ValueError('invalid_readiness_result')
                 recovery_payload['accounts'] = readiness_repair_accounts(payload, before_checks)
+                if prepare_project is not None and not automatic and not payload.get('operator_dispatch_paused'):
+                    from live_pool import Conflict
+                    for account in recovery_payload['accounts']:
+                        profile = account['profile']
+                        if account['projects'] or before_checks.get(profile) != 'binding':
+                            continue
+                        try:
+                            account['projects'] = [prepare_project(account)]
+                            repairs[profile] = {'actions': ['prepare_project']}
+                        except Conflict as exc:
+                            repairs[profile] = {'actions': [], 'note': str(exc)}
                 if automatic:
                     now = time.monotonic()
                     self._automatic_recovery_after = {
@@ -1037,7 +1052,10 @@ class Sources:
             if recovery_payload['accounts']:
                 result = subprocess.run([str(python),'-B',str(recovery)],input=json.dumps(recovery_payload).encode(),
                                         capture_output=True,check=True,timeout=175)
-                repairs = json.loads(result.stdout)
+                for profile, result in json.loads(result.stdout).items():
+                    initial = repairs.get(profile, {})
+                    repairs[profile] = {**initial, **result,
+                                        'actions': initial.get('actions', []) + result.get('actions', [])}
                 if automatic:
                     self._automatic_recovery_after.update({
                         profile: time.monotonic() + 300 for profile, item in repairs.items()
@@ -1902,7 +1920,9 @@ def make_handler(sources, deployment="local", coordinator=None, real_pool=None, 
                                 or not isinstance(raw['account'],str) or not re.fullmatch(r'flow-account-[0-9a-f]{64}',raw['account'])
                                 or not isinstance(raw['task'],str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',raw['task'])):
                             raise ValueError()
-                    elif raw != {}:
+                    elif raw != {} and not (self.path == '/api/flow-readiness' and isinstance(raw, dict)
+                            and set(raw) == {'account'} and isinstance(raw['account'], str)
+                            and re.fullmatch(r'flow-account-[0-9a-f]{64}', raw['account'])):
                         raise ValueError()
                     self.connection.settimeout(None)
                 except (OSError,ValueError,TypeError):
@@ -1914,7 +1934,8 @@ def make_handler(sources, deployment="local", coordinator=None, real_pool=None, 
                     return self.json_response(409,{'error':'工作台正在维护或已有一轮就绪检查，请稍后再试。'})
                 try:
                     result = sources.flow_readiness(repair=True,manual_review=(raw['account'],raw['task']) if manual else None,
-                        automatic=self.path.endswith('/auto'))
+                        automatic=self.path.endswith('/auto'), account_key=None if manual else raw.get('account'),
+                        prepare_project=real_pool.prepare_readiness_project if self.path == '/api/flow-readiness' else None)
                     if manual and not result.get('released'):
                         return self.json_response(409,{'error':'原任务或账号状态已变化，未放行；请重新检查。'})
                     return self.json_response(200,result)

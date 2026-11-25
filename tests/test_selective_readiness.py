@@ -106,4 +106,36 @@ class SelectiveReadiness(unittest.TestCase):
         self.assertEqual(result['accounts'],{'cleaned':'ok','untouched':'ok'})
         source.refresh_flow_balances_once.assert_called_once_with(['cleaned'])
 
+    def test_manual_readiness_prepares_a_project_for_the_selected_account(self):
+        common = dict(email='fixture@example.invalid', flow_login='verified', flow_page_incident=None,
+                      flow_risk_known=True, flow_risk_paused=False, flow_pacing_known=True,
+                      flow_cooling=False, flow_balance_fresh=True)
+        accounts = [dict(common, profile=profile, key='flow-account-'+profile)
+                    for profile in ('new', 'other')]
+        project_id = 'c843623e-00b9-4ce1-907d-f95eaa30317f'
+        source = Sources()
+        source.read = Mock(return_value=({'tasks': []}, None))
+        prepare_project = Mock(return_value=project_id)
+        projects = [dict(source_profile='new', source_id=project_id)]
+        response = lambda data: S(stdout=json.dumps(data).encode())
+        with patch('server.account_rows', return_value=accounts), \
+             patch('server.project_rows', side_effect=[[], projects]), \
+             patch('server.task_rows', return_value=[]), \
+             patch('server.Path', side_effect=[S(read_bytes=lambda: sys.executable.encode()), Path(sys.executable)]), \
+             patch('server.subprocess.check_output', return_value='123'), \
+             patch('flow_readiness_recovery.operator_dispatch_paused', return_value=False), \
+             patch('server.subprocess.run', side_effect=[
+                 response({'new': 'binding'}),
+                 response({'new': {'page': 'ok', 'actions': ['rebind']}}),
+                 response({'new': 'ok'}),
+             ]) as run:
+            result = source.flow_readiness(repair=True, account_key='flow-account-new',
+                                           prepare_project=prepare_project)
+        self.assertEqual(prepare_project.call_count, 1)
+        binding_input = json.loads(run.call_args_list[1].kwargs['input'])
+        self.assertEqual([(account['profile'], account['projects']) for account in binding_input['accounts']],
+                         [('new', [project_id])])
+        self.assertEqual(result['accounts'], {'new': 'ok'})
+        self.assertEqual(result['repairs']['new']['actions'], ['prepare_project', 'rebind'])
+
 if __name__=='__main__':unittest.main()
