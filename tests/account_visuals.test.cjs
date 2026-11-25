@@ -230,17 +230,17 @@ test('overview only averages the fresh shared quotas of the default HY pool', ()
   assert.match(breakdown.innerHTML, /账号与普通 Gemini 额度明细/);
 });
 
-test('account avatars mark only enabled advanced Gemini model choices', () => {
+test('Gemini account avatars distinguish Neon and Carbon independently', () => {
   const context = vm.createContext({});
   load('esc', context);
   load('accountAvatarMarkup', context);
   const render = families => vm.runInContext(`accountAvatarMarkup('account', ${JSON.stringify(families.map(family => ({family})))})`, context);
-  for (const family of ['gemini-4-neon', 'gemini-4-hydrogen']) {
-    const markup = render(['gemini-3.8-flash', family]);
-    assert.match(markup, /account-avatar is-gemini-advanced/);
-    assert.match(markup, /aria-label="支持 Gemini 高级模型"/);
-  }
-  for (const families of [[], ['gemini-3.8-flash']]) {
+  const neon = 'gemini-4-neon';
+  const carbon = 'gemini-4-carbon';
+  assert.match(render([neon]), /class="account-avatar has-gemini-neon"[^>]+aria-label="可用模型：Gemini 4 Neon"/);
+  assert.match(render([carbon]), /class="account-avatar has-gemini-carbon"[^>]+aria-label="可用模型：Gemini 4 Carbon"/);
+  assert.match(render([carbon, neon]), /class="account-avatar has-gemini-neon has-gemini-carbon"[^>]+aria-label="可用模型：Gemini 4 Neon、Gemini 4 Carbon"/);
+  for (const families of [[], ['gemini-3.8-flash'], ['gemini-4-hydrogen']]) {
     assert.match(render(families), /class="account-avatar" aria-hidden="true"/);
   }
 });

@@ -64,7 +64,8 @@ button:disabled { cursor: wait; opacity: .6; }
 .account-card:hover, .account-card:focus-within { z-index: 2; }
 .account-card-heading { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .account-avatar { display: grid; place-items: center; flex: none; width: 42px; height: 42px; border-radius: 12px; background: #e5f2e9; color: #226c55; font-weight: 700; font-size: 17px; }
-.account-avatar.is-gemini-advanced { box-shadow: inset 0 0 0 2px #b57a17; }
+.account-avatar.has-gemini-neon { box-shadow: inset 0 0 0 2px #9b600d; }
+.account-avatar.has-gemini-carbon { background: #ffd86a; color: #493106; }
 .account-identity { min-width: 0; flex: 1; }
 .account-identity h3 { margin: 1px 0 0; font-size: 15px; overflow-wrap: anywhere; line-height: 1.35; }
 .account-alias { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }

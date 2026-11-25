@@ -2428,11 +2428,14 @@ $("realAccountTable").addEventListener("dragend", () => {
 });
 
 function accountAvatarMarkup(identity, modelOptions) {
-  const advanced = Array.isArray(modelOptions) && modelOptions.some(option =>
-    ['gemini-4-neon', 'gemini-4-hydrogen', 'gemini-4-carbon'].includes(option?.family));
+  const options = Array.isArray(modelOptions) ? modelOptions : [];
+  const neon = options.some(option => option?.family === 'gemini-4-neon');
+  const carbon = options.some(option => option?.family === 'gemini-4-carbon');
+  const models = [neon && 'Gemini 4 Neon', carbon && 'Gemini 4 Carbon'].filter(Boolean);
+  const label = `可用模型：${models.join('、')}`;
   const initial = esc(String(identity).slice(0, 1).toUpperCase());
-  const attributes = advanced ? 'role="img" aria-label="支持 Gemini 高级模型" title="支持 Gemini 高级模型"' : 'aria-hidden="true"';
-  return `<div class="account-avatar${advanced ? ' is-gemini-advanced' : ''}" ${attributes}>${initial}</div>`;
+  const attributes = models.length ? `role="img" aria-label="${esc(label)}" title="${esc(label)}"` : 'aria-hidden="true"';
+  return `<div class="account-avatar${neon ? ' has-gemini-neon' : ''}${carbon ? ' has-gemini-carbon' : ''}" ${attributes}>${initial}</div>`;
 }
 
 function renderAccounts() {
@@ -2554,6 +2557,8 @@ function renderAccounts() {
     const flowReady = flowRow?.status === 'ready' || flowRow?.status === 'queue';
     const callState = officialAccount(item);
     const geminiReady = geminiAccountAvailability(item).manual;
+    const avatarModels = !flow && geminiReady && !callState.data?.advanced_quota_restriction
+      ? item.gemini_model_options : null;
     const callBlocked = callState.paused ||
       (!channelReadFailed && state.channelStatus?.available === true && state.channelStatus.production_send_available === false) ||
       callState.data?.dispatch_eligible === false;
@@ -2612,7 +2617,7 @@ function renderAccounts() {
       geminiFallback ? `<p><strong>Gemini：</strong>${esc(geminiFallback)}</p>` : '',
     ]).join('');
     return `<article class="account-card${cardState}"${flow ? '' : ` draggable="true" data-drag-key="${esc(quotaKey)}"`}>
-      <div class="account-card-heading">${accountAvatarMarkup(identity, flow ? null : item.gemini_model_options)}<div class="account-identity"><span class="account-alias">${esc(item.label || item.profile)}</span><h3 title="${esc(identity)}">${esc(identity)}</h3></div>${flow ? `<span class="account-login ${signIn ? 'is-login-required' : item.flow_login === 'verified' ? 'is-ready' : ''}">${esc(login)}</span>` : ''}
+      <div class="account-card-heading">${accountAvatarMarkup(identity, avatarModels)}<div class="account-identity"><span class="account-alias">${esc(item.label || item.profile)}</span><h3 title="${esc(identity)}">${esc(identity)}</h3></div>${flow ? `<span class="account-login ${signIn ? 'is-login-required' : item.flow_login === 'verified' ? 'is-ready' : ''}">${esc(login)}</span>` : ''}
         <div class="account-detail-anchor"><details class="account-details"><summary aria-label="查看 ${esc(identity)} 的详细状态" aria-controls="account-detail-${accountKey}">详情</summary></details><div id="account-detail-${accountKey}" class="account-detail-popup"><strong>账号状态详情</strong>${flow ? `<p>Flow：${esc(flowStatusText)} · ${esc(freshness + observed)}。${hasBalance ? '剩余 ' + esc(balance) + ' 积分。' : ''}未提供积分总额度。</p>${coolingInfo ? `<p>${esc(coolingInfo)}</p>` : ''}<p>Flow · ${esc(flowPerformance)}</p>` : `${officialDetails(official)}<p>Gemini · ${esc(gemPerformance)}</p>`}${issues.length ? `<div class="account-detail-issues"><strong>状态说明</strong>${issues.map(issue => `<p><b>${esc(issue.title)}</b><br>${esc(issue.impact)} ${esc(issue.action)}</p>`).join('')}</div>` : ''}</div></div></div>
       <div class="account-services account-services-single">${flow ? `<div class="account-service account-service-flow${flowNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc(('Flow：' + flowStatusText))}" title="${esc(('Flow：' + flowStatusText))}"><div class="account-service-heading"><span>Flow</span><strong class="account-health ${flowPaused ? 'is-paused' : cooling ? 'is-cooling' : flowRow?.status!=='ready' ? 'is-unknown' : ''}">${esc(flowStatusText)}</strong></div><div class="account-flow-value"><div title="${esc(flowBalanceTitle)}"><strong>${esc(balance)}</strong><small class="account-quota-reset">下次积分到账 ${esc(flowNextCredit || '待官方更新')}${flowNextCredit && !item.flow_balance_fresh ? '（上次读取）' : ''}</small></div>${cooling ? `<div class="account-cooldown" data-risk-paused="${flowPaused}"${cooldownEnd !== null ? ` data-cooldown-end="${cooldownEnd}"` : ' aria-label="冷却中，剩余时间待核对"'}><span class="account-cooldown-time">—</span><span class="account-cooldown-label">冷却中</span></div>` : '<span class="account-credit-icon" aria-hidden="true">✦</span>'}</div></div>` : `<div class="account-service account-service-gemini${geminiNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}" title="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}"><div class="account-service-heading"><span>Gemini</span><strong class="account-health${geminiReady && !geminiNeedsAttention ? '' : ' is-unknown'}">${esc(geminiStatusText)}</strong></div>${item.gemini_removed ? '' : `<div data-account-quota="${accountKey}">${quotaView.html}</div>`}</div>`}</div>
       ${flow && flowReason?.showOnCard ? flowNotice : ''}
