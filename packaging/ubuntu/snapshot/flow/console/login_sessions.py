@@ -7,6 +7,7 @@ import re
 import secrets
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from cryptography.fernet import Fernet
 
@@ -139,19 +140,30 @@ async def inject_verified(context, page, bundle, read_state, vault, *, finalize)
     old = await context.cookies()
     backup = vault.put({"cookies": old})
     restored = True
-    failure = "登录导入未通过在线邮箱核对"
+    failure = "无法写入本次登录资料"
     try:
         await context.clear_cookies()
         await context.add_cookies(bundle["cookies"])
+        failure = "Ubuntu 浏览器未能打开 Flow 页面"
         await page.goto("https://flow.google.com/", wait_until="domcontentloaded", timeout=45000)
         for _ in range(12):
+            failure = "无法读取 Flow 页面登录状态"
             state = await read_when_ready(page, read_state)
             emails = [str(e).lower() for e in state.get("emails", [])]
-            if state.get("signed_in") and emails == [bundle["email"]]:
-                failure = "邮箱一致，但项目同步或窗口登记未完成"
-                return await finalize(state)
-            if state.get("signed_in") and emails and bundle["email"] not in emails:
-                break
+            if state.get("signed_in"):
+                if emails == [bundle["email"]]:
+                    failure = "邮箱一致，但项目同步或窗口登记未完成"
+                    return await finalize(state)
+                if emails and bundle["email"] not in emails:
+                    failure = "Flow 返回的邮箱与目标账号不一致"
+                    break
+                failure = "Flow 未返回唯一的登录邮箱"
+            else:
+                host = urlsplit(page.url).hostname
+                failure = {
+                    "accounts.google.com": "Flow 跳到了 Google 登录页面，未能确认登录",
+                    "flow.google.com": "Flow 页面未确认登录状态",
+                }.get(host, "Flow 跳到了其他页面，未能核对登录状态")
             await asyncio.sleep(1)
         raise ValueError(failure)
     except (Exception, asyncio.CancelledError) as error:
