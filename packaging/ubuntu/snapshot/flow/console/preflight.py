@@ -313,9 +313,12 @@ def _unexpected_extensions(default, settings, on_disk):
         if not isinstance(secure, dict):
             raise ValueError('invalid secure extension settings')
     unexpected = on_disk.difference(settings, secure)
+    # An empty regular preference can remain without an installed extension.
+    empty_records = {ident for ident, entry in settings.items()
+                     if entry == {} and ident not in on_disk and ident not in secure}
     for source in (settings, secure):
         for ident, entry in source.items():
-            if not EXTENSION_ID.fullmatch(ident):
+            if not EXTENSION_ID.fullmatch(ident) or ident in empty_records:
                 continue
             installed = ident in on_disk
             # Chrome can keep an update timestamp after the extension is gone.

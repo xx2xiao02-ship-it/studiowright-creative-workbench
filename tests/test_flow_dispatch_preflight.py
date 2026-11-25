@@ -320,6 +320,20 @@ class ChromeComponentDispatch(unittest.TestCase):
         (self.default(self.profile) / 'Extensions' / extra).mkdir()
         self.assertEqual(dispatch_check(self.root, self.profile), denied)
 
+    def test_empty_regular_preferences_entry_is_ignored_only_without_installation_evidence(self):
+        ident, manifest = self.manifest('empty-updater-entry')
+        self.write_prefs(self.profile, dict(self.records, **{ident: {}}))
+        self.assertEqual(dispatch_check(self.root, self.profile), (True, []))
+
+        expected = (False, [f'extension_present:{ident}'])
+        folder = self.default(self.profile) / 'Extensions' / ident
+        folder.mkdir()
+        self.assertEqual(dispatch_check(self.root, self.profile), expected)
+        folder.rmdir()
+
+        self.write_prefs(self.profile, {ident: {'manifest': manifest, 'location': 1}}, secure=True)
+        self.assertEqual(dispatch_check(self.root, self.profile), expected)
+
     def test_extension_ping_history_is_ignored_only_without_any_installation_evidence(self):
         extra, manifest = self.manifest('extension-ping-history')
         history = {'lastpingday': '13400000000000000'}
