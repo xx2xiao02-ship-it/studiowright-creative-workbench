@@ -103,8 +103,9 @@ class SelectiveReadiness(unittest.TestCase):
                            'returned':{'page':'ok','actions':['return_to_project']},
                            'partial':{'page':'binding','actions':['open_browser']}}),
                  response({'cleaned':'ok','returned':'ok','partial':'ok','untouched':'ok'}),
-             ]):
+             ]) as run:
             result=source.flow_readiness(repair=True,automatic=True)
+        self.assertFalse(json.loads(run.call_args_list[1].kwargs['input'])['reset_draft'])
         self.assertEqual(result['accounts'],{'cleaned':'ok','returned':'ok','partial':'ok','untouched':'ok'})
         source.refresh_flow_balances_once.assert_called_once_with(['cleaned','returned'])
 
@@ -138,6 +139,7 @@ class SelectiveReadiness(unittest.TestCase):
         self.assertEqual([(account['profile'], account['projects']) for account in binding_input['accounts']],
                          [('new', [project_id])])
         self.assertTrue(binding_input['accounts'][0]['project_prepared'])
+        self.assertTrue(binding_input['reset_draft'])
         self.assertEqual(result['accounts'], {'new': 'ok'})
         self.assertEqual(result['repairs']['new']['actions'], ['prepare_project', 'rebind'])
 

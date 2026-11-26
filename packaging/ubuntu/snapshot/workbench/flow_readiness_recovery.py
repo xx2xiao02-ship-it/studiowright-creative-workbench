@@ -405,7 +405,7 @@ def restart_managed(binding, allow_responsive=False):
     subprocess.run(systemctl+['restart',unit],check=True,capture_output=True,timeout=12)
 
 
-async def reload_failed_project(ws, account, expected, project, actions):
+async def reload_fixed_project(ws, account, expected, project, actions, issue):
     await asyncio.to_thread(guard_live, account)
     frame = (await command(ws, 'Page.getFrameTree'))['frameTree']['frame']
     state = await evaluate(ws, expected)
@@ -413,10 +413,11 @@ async def reload_failed_project(ws, account, expected, project, actions):
     if (canonical_project_url(frame['url']) != project or not state.get('origin')
             or state.get('path', '').rstrip('/') != project_path):
         return {}
-    if state.get('overlay') or page_verdict(state) != 'load_failed':
+    if (state.get('overlay') or page_verdict(state) != issue
+            or (issue == 'draft' and not state.get('account'))):
         return state
     await asyncio.wait_for(command(ws, 'Page.reload', {'loaderId': frame['loaderId']}), timeout=3)
-    actions.append('reload')
+    actions.append('reset_draft' if issue == 'draft' else 'reload')
     for _ in range(20):
         await asyncio.sleep(.4)
         loaded = (await command(ws, 'Page.getFrameTree'))['frameTree']['frame']
@@ -474,7 +475,7 @@ async def reopen_redirected_project(ws, account, expected, project, actions):
     return state
 
 
-async def repair(account, initial, actions, safe_only=False):
+async def repair(account, initial, actions, safe_only=False, reset_draft=False):
     import websockets
     from flow_window_policy import Lifecycle
     from task_coordinator import Coordinator
@@ -510,11 +511,11 @@ async def repair(account, initial, actions, safe_only=False):
             verdict = page_verdict(before)
             if verdict in ('login', 'verification_required', 'flow_landing') or (redirected and verdict != 'ok'):
                 return verdict,None
-            if verdict == 'load_failed':
+            if verdict == 'load_failed' or (verdict == 'draft' and reset_draft):
                 if (not same or not old or old.get('binding_state') != 'verified'
                         or old.get('project_url') != project or any(old.get(k)!=v for k,v in current.items())):
                     return 'binding',None
-                before = await reload_failed_project(ws, account, expected, project, actions)
+                before = await reload_fixed_project(ws, account, expected, project, actions, verdict)
                 verdict = page_verdict(before)
                 if verdict != 'ok':
                     return verdict,None
@@ -689,6 +690,7 @@ async def recover(payload):
     from task_coordinator import Coordinator
     _, paths = flow_runtime()
     busy = set(payload['busy'])
+    reset_draft = payload.get('reset_draft') is True
     bindings = {b['profile']:b for b in payload['bindings']}
     lifecycle = {w['profile']:w for w in Lifecycle().status()}
     out = {}
@@ -739,8 +741,10 @@ async def recover(payload):
                 if before == 'unique' or (before == 'ok' and not old_draft and lifecycle.get(p,{}).get('unique_ok') != 1):
                     verdict = await asyncio.wait_for(reconcile_fixed_window(account,binding,actions),
                         timeout=min(45,max(1,deadline-asyncio.get_running_loop().time())))
-                elif before in {'binding','project','editor','overlay','load_failed','flow_landing'} or old_draft:
-                    verdict,_ = await asyncio.wait_for(repair(account,before,actions,safe_only=payload.get('safe_only') is True),
+                elif (before in {'binding','project','editor','overlay','load_failed','flow_landing'} or old_draft
+                      or (before == 'draft' and reset_draft)):
+                    verdict,_ = await asyncio.wait_for(repair(account,before,actions,
+                        safe_only=payload.get('safe_only') is True,reset_draft=reset_draft),
                         timeout=min(45,max(1,deadline-asyncio.get_running_loop().time())))
                 else:
                     verdict = before

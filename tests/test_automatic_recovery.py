@@ -13,7 +13,7 @@ from test_flow_regressions import fixture_directory
 
 
 class AutomaticRecoverySafety(unittest.IsolatedAsyncioTestCase):
-    async def run_case(self, page='binding', busy=False, review=None, repairable=True):
+    async def run_case(self, page='binding', busy=False, review=None, repairable=True, reset_draft=False):
         with fixture_directory() as directory:
             controller=types.ModuleType('shared_session_controller')
             controller.flow_runtime=lambda:(None,types.SimpleNamespace(locks_dir=lambda:directory))
@@ -27,7 +27,8 @@ class AutomaticRecoverySafety(unittest.IsolatedAsyncioTestCase):
                  patch.object(recovery,'review_hold',return_value=False), \
                  patch.object(recovery.subprocess,'check_output',return_value='active'):
                 lifecycle.return_value.status.return_value=[]
-                result=await recovery.recover(dict(accounts=[account],bindings=[],busy=['fixture'] if busy else [],safe_only=True))
+                result=await recovery.recover(dict(accounts=[account],bindings=[],busy=['fixture'] if busy else [],
+                                                   safe_only=True,reset_draft=reset_draft))
             return result,action
 
     async def test_recoverable_page_uses_guarded_repair(self):
@@ -52,6 +53,14 @@ class AutomaticRecoverySafety(unittest.IsolatedAsyncioTestCase):
         result,action=await self.run_case(page='login')
         self.assertEqual(result['fixture']['page'],'login')
         action.assert_not_awaited()
+
+    async def test_manual_reset_repairs_idle_drafts_only(self):
+        result,action=await self.run_case(page='draft',reset_draft=True)
+        self.assertEqual(result['fixture']['page'],'ok')
+        self.assertTrue(action.await_args.kwargs['reset_draft'])
+        for args in [dict(busy=True),dict(repairable=False),dict(review='original-task')]:
+            _,action=await self.run_case(page='draft',reset_draft=True,**args)
+            action.assert_not_awaited()
 
     async def test_duplicate_cleanup_retains_binding_and_requires_empty_project_or_home_pages(self):
         project='https://flow.google.com/project/11111111-1111-4111-8111-111111111111'

@@ -1021,6 +1021,7 @@ class Sources:
                 payload['manual_review'] = True
             recovery_payload = dict(payload)
             if not manual_review:
+                recovery_payload['reset_draft'] = not automatic and not payload.get('operator_dispatch_paused')
                 before = subprocess.run([str(python),'-B',str(helper)], input=json.dumps(payload).encode(),
                                         capture_output=True, check=True, timeout=10)
                 before_checks = json.loads(before.stdout)

@@ -189,7 +189,7 @@ class FlowOverlayReload(unittest.IsolatedAsyncioTestCase):
                 patch.object(recovery, 'command', AsyncMock(side_effect=[old, {}, old, new, new])) as c, \
                 patch.object(recovery, 'evaluate', AsyncMock(side_effect=[blank, loading, ready])), \
                 patch.object(recovery.asyncio, 'sleep', AsyncMock()):
-            self.assertEqual(await recovery.reload_failed_project(None, {}, '', PROJECT, actions), ready)
+            self.assertEqual(await recovery.reload_fixed_project(None, {}, '', PROJECT, actions, 'load_failed'), ready)
         self.assertEqual(actions, ['reload'])
         self.assertEqual([call.args[2] for call in c.await_args_list if call.args[1] == 'Page.reload'],
                          [{'loaderId': 'old'}])
@@ -204,6 +204,22 @@ class FlowOverlayReload(unittest.IsolatedAsyncioTestCase):
                 with patch.object(recovery, 'guard_live'), \
                         patch.object(recovery, 'command', AsyncMock(return_value=frame)) as c, \
                         patch.object(recovery, 'evaluate', AsyncMock(return_value=state)):
-                    self.assertEqual(await recovery.reload_failed_project(None, {}, '', PROJECT, actions), state)
+                    self.assertEqual(await recovery.reload_fixed_project(None, {}, '', PROJECT, actions, 'load_failed'), state)
                 c.assert_awaited_once()
                 self.assertEqual(actions, [])
+
+    async def test_manual_draft_reset_reloads_once_and_rechecks_the_editor(self):
+        draft = dict(origin=True, account=True, draft=True, editor=True, path=STATE['path'])
+        ready = dict(draft, draft=False)
+        old = {'frameTree': {'frame': {'url': PROJECT, 'loaderId': 'old'}}}
+        new = {'frameTree': {'frame': {'url': PROJECT, 'loaderId': 'new'}}}
+        for after in (ready, draft):
+            actions = []
+            with patch.object(recovery, 'guard_live'), \
+                    patch.object(recovery, 'command', AsyncMock(side_effect=[old, {}, new])) as command, \
+                    patch.object(recovery, 'evaluate', AsyncMock(side_effect=[draft, after])), \
+                    patch.object(recovery.asyncio, 'sleep', AsyncMock()):
+                self.assertEqual(await recovery.reload_fixed_project(None, {}, '', PROJECT, actions, 'draft'), after)
+            self.assertEqual(actions, ['reset_draft'])
+            self.assertEqual([c.args[2] for c in command.await_args_list if c.args[1] == 'Page.reload'],
+                             [{'loaderId': 'old'}])

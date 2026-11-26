@@ -1447,9 +1447,10 @@ function renderAccountInsights(snapshot, target) {
     const readiness = `<strong>${count}<small> / ${capacity}</small></strong>`;
     const center = metric ? `<strong>${esc(metric.value)}${metric.unit ? `<small> ${esc(metric.unit)}</small>` : ''}</strong><span>${esc(metric.label)}</span>${metric.change ? `<span class="ring-music-change">${esc(metric.change)}</span>` : ''}`
       : readiness + '<span>就绪账号</span>';
-    const accessibleName = [name + ' 一键就绪', description, label && label !== description ? label : '',
+    const resetHint = service === 'FLOW' ? '刷新有草稿的空闲任务页，清除未提交内容' : '';
+    const accessibleName = [name + ' 一键就绪', description, label && label !== description ? label : '', resetHint,
       metric && `${metric.label} ${metric.value}${metric.unit || ''}`, metric?.note, metric?.change].filter(Boolean).join('，');
-    return `<button type="button" class="dashboard-ring-item governance-entry" ${action} aria-label="${esc(accessibleName)}">
+    return `<button type="button" class="dashboard-ring-item governance-entry" ${action} aria-label="${esc(accessibleName)}" ${resetHint ? `title="${esc(resetHint)}"` : ''}>
       <span class="desk-service-body"><span class="desk-service-name">${name}</span>${metric ? `<span class="desk-service-total">${readiness}<span>就绪账号</span></span>${metric.note ? `<span class="desk-service-note">${esc(metric.note)}</span>` : ''}` : ''}</span>
       <span class="insight-ring ${ringClass} ${known ? '' : 'is-unknown'}" data-dashboard-ring="${service}" aria-hidden="true"><span class="governance-ring-center">${center}</span></span>
       <span class="desk-service-footer"><span class="desk-service-action">一键就绪 <span aria-hidden="true">→</span></span><span class="governance-alert" ${label ? '' : 'hidden'}>${esc(label)}</span></span>
@@ -1548,7 +1549,7 @@ let governanceService = 'gemini', governanceCases = null, governanceRead = null,
 let governanceError = '';
 const governanceAudits = {flow:null,gemini:null};
 const governanceAuditLabels = {ready:'可立即派发',queue:'需排队',blocked:'暂不可用',unknown:'待确认'};
-const flowRecoveryLabels = {prepare_project:'准备该账号的项目',rebind:'重新绑定原窗口',open_project:'进入原账号项目',return_to_project:'尝试返回原任务页',reload:'刷新原页面',restart:'重启该账号浏览器',dismiss_update:'关闭 Flow 更新提示',dismiss_account_panel:'关闭 Flow 账号面板',release_review:'已核对原任务，解除限制',close_duplicate:'关闭同项目空副本',recheck_window:'复查原固定任务页'};
+const flowRecoveryLabels = {prepare_project:'准备该账号的项目',rebind:'重新绑定原窗口',open_project:'进入原账号项目',return_to_project:'尝试返回原任务页',reload:'刷新原页面',reset_draft:'为清除未提交内容刷新原页面',restart:'重启该账号浏览器',dismiss_update:'关闭 Flow 更新提示',dismiss_account_panel:'关闭 Flow 账号面板',release_review:'已核对原任务，解除限制',close_duplicate:'关闭同项目空副本',recheck_window:'复查原固定任务页'};
 
 function flowOccupiedSlots(dispatch) {
   return dispatch?.occupied_slots ?? dispatch?.active;
@@ -1582,7 +1583,7 @@ function auditFlowAccounts(snapshot, dispatch, pageChecks, probeStartedAt) {
       unique:['固定任务窗口待复查','算力中心保留已绑定的任务页，自动关闭确认空闲的多余首页和空副本。'],
       project:['任务窗口不在该账号的已登记项目','核对对应项目与固定窗口绑定。'],
       load_failed:['固定任务页加载失败','点 Flow 一键就绪，刷新原任务页并复查。'],
-      draft:['固定任务窗口有草稿或附件','算力中心会保留草稿。处理后再检查就绪。'],
+      draft:['固定任务窗口有草稿或附件','点 Flow 一键就绪可刷新空闲任务页，清除未提交的内容。'],
       overlay:['任务页有弹窗挡住输入','在原窗口核对提示；如需验证，请按官方提示完成。'],
       editor:['任务页未确认可用的输入框','核对页面是否加载完成或是否需要更新。']};
     const signIn = flowLoginNotice(page);
