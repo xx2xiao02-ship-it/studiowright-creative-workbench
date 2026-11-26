@@ -44,7 +44,7 @@ Windows 的 Chrome 管理助手也使用本机 `18890`。桌面客户端负责�
 
 ```bash
 # 把下面的文件名换成本次下载或构建的实际包名
-installer=./StudioWright-Ubuntu-24.04-Setup-1.0.0.run
+installer=./StudioWright-Ubuntu-24.04-Setup-1.0.1.run
 sha256sum "$installer"
 bash "$installer" --mode inspect
 ```

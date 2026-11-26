@@ -4,7 +4,7 @@ StudioWright 把 **Flow 图片与视频生成、Gemini 对话与识图、音乐�
 
 **Windows 负责操作，Ubuntu 负责执行和保存数据。** Windows 桌面端通过 SSH 连接 Ubuntu，支持局域网发现和系统托盘。任务、账号状态、项目和素材由 Ubuntu 上的服务管理。
 
-[下载 v1.0.0](https://github.com/xx2xiao02-ship-it/studiowright-creative-workbench/releases/tag/v1.0.0) · [安装说明](docs/安装说明.md) · [API 文档](docs/API.md) · [版本记录](CHANGELOG.md)
+[下载 v1.0.1](https://github.com/xx2xiao02-ship-it/studiowright-creative-workbench/releases/tag/v1.0.1) · [安装说明](docs/安装说明.md) · [API 文档](docs/API.md) · [版本记录](CHANGELOG.md)
 
 ## 可以做什么
 
@@ -21,9 +21,9 @@ StudioWright 把 **Flow 图片与视频生成、Gemini 对话与识图、音乐�
 
 | 安装包 | 下载与要求 |
 | --- | --- |
-| **Ubuntu 全量服务端** | [下载 Ubuntu 24.04 安装包](https://github.com/xx2xiao02-ship-it/studiowright-creative-workbench/releases/download/v1.0.0/StudioWright-Ubuntu-24.04-Setup-1.0.0.run)。使用 Ubuntu 24.04 桌面版（x86-64、GNOME 46），提前安装 Chrome。 |
-| **Windows 全量操作端** | [下载 Windows 安装包](https://github.com/xx2xiao02-ship-it/studiowright-creative-workbench/releases/download/v1.0.0/StudioWright-Windows-Desktop-Setup-v1.0.0.exe)。使用 Windows x64，需要 WebView2 Runtime，嵌入式 Python 已随包提供。 |
-| **SHA-256 校验** | [下载校验文件](https://github.com/xx2xiao02-ship-it/studiowright-creative-workbench/releases/download/v1.0.0/SHA256SUMS.txt)。校验值用于检查安装包下载是否完整。 |
+| **Ubuntu 全量服务端** | [下载 Ubuntu 24.04 安装包](https://github.com/xx2xiao02-ship-it/studiowright-creative-workbench/releases/download/v1.0.1/StudioWright-Ubuntu-24.04-Setup-1.0.1.run)。使用 Ubuntu 24.04 桌面版（x86-64、GNOME 46），提前安装 Chrome。 |
+| **Windows 全量操作端** | [下载 Windows 安装包](https://github.com/xx2xiao02-ship-it/studiowright-creative-workbench/releases/download/v1.0.1/StudioWright-Windows-Desktop-Setup-v1.0.1.exe)。使用 Windows x64，需要 WebView2 Runtime，嵌入式 Python 已随包提供。 |
+| **SHA-256 校验** | [下载校验文件](https://github.com/xx2xiao02-ship-it/studiowright-creative-workbench/releases/download/v1.0.1/SHA256SUMS.txt)。校验值用于检查安装包下载是否完整。 |
 
 1. **先准备 Ubuntu。** 新机器以普通桌面用户运行 Ubuntu 安装包，先用 `--mode system-deps` 准备系统依赖，再用 `--mode new` 安装服务。已有工作台可用 `--mode reuse` 继续使用原服务和数据。要把已有服务升级到 1.0，请按手册分组更新并准备回退。[Ubuntu 安装与升级](docs/DEPLOYMENT.md)
 2. **再连接 Windows。** 安装桌面端后打开「连接 Ubuntu 工作台」，选择局域网发现的主机或手动输入地址。首次连接时向管理员核对 SSH 主机指纹。密码仅供当前会话使用。[Windows 连接与账号助手](docs/DEPLOYMENT.md#3-windows-操作端)
