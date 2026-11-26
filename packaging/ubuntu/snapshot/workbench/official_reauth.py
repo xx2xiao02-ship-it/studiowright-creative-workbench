@@ -30,6 +30,23 @@ TOKEN = Path('home/.gemini/antigravity-cli/antigravity-oauth-token')
 PROBE_AUTH='readiness_authorization_required'
 
 
+def authorization_window(account_key):
+    """Find the account's verified Ubuntu Chrome without creating a Flow project."""
+    from flow_browser_state import _pages, registered_authorization_window
+    from task_window_registry import TaskWindowRegistry, process_identity
+
+    binding = TaskWindowRegistry().get(account_key)
+    if binding:
+        pid, port = binding['browser_pid'], binding['port']
+        try:
+            if (process_identity(pid, account_key, port) == (binding['profile'], binding['process_start'])
+                    and any(page['id'] == binding['page_target'] for page in _pages(account_key, pid, port))):
+                return binding
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+    return registered_authorization_window(account_key)
+
+
 def close_authorization_tab(stage, account_key):
     """Close only this login's recorded tab, after its token was saved."""
     from urllib.parse import urlsplit
@@ -37,8 +54,10 @@ def close_authorization_tab(stage, account_key):
     from task_window_registry import TaskWindowRegistry, process_identity
     try:
         target = private_bytes(stage/'browser-target', 128).decode('ascii')
-        binding = TaskWindowRegistry().get(account_key)
-        if (not binding or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', target)
+        saved_window = stage/'browser-window.json'
+        binding = (json.loads(private_bytes(saved_window, 2048)) if saved_window.is_file()
+                   else TaskWindowRegistry().get(account_key))
+        if (not isinstance(binding, dict) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', target)
                 or target == binding['page_target']):
             return False
         pid, port = binding['browser_pid'], binding['port']
@@ -447,13 +466,13 @@ def browser_authorize(stage,binary,account_key,email):
     from urllib.parse import parse_qs,urlsplit
     from urllib.request import build_opener, ProxyHandler, Request
     from flow_browser_state import _pages, focus_call
-    from task_window_registry import TaskWindowRegistry, process_identity
+    from task_window_registry import process_identity
     gi.require_version('Gtk','3.0')
     gi.require_version('Vte','2.91')
     gi.require_version('Soup','3.0')
     from gi.repository import Gtk,Vte,GLib,Soup
 
-    binding=TaskWindowRegistry().get(account_key)
+    binding=authorization_window(account_key)
     if not binding:return
     pid,port=binding['browser_pid'],binding['port']
     chrome_http=f'http://127.0.0.1:{port}'
@@ -489,6 +508,7 @@ def browser_authorize(stage,binary,account_key,email):
     tab_id=None
     opened=False
     main_frame=None
+    expected_window=binding.get('chrome_window')
     session=Soup.Session()
     socket=None
 
@@ -554,14 +574,20 @@ def browser_authorize(stage,binary,account_key,email):
         ws.send_text(json.dumps({'id':id_,'method':method,'params':params or {}}))
 
     def browser_message(ws,kind,data):
-        nonlocal main_frame,opened
+        nonlocal main_frame,opened,expected_window
         if kind!=Soup.WebsocketDataType.TEXT:return
         msg=json.loads(data.get_data())
         if msg.get('id')==7:
             if callback_state_ok:
                 submit_code(msg.get('result',{}).get('result',{}).get('value'))
+        elif msg.get('id')==8:
+            expected_window=msg.get('result',{}).get('windowId')
+            if type(expected_window) is not int or expected_window<=0:
+                Gtk.main_quit()
+                return
+            send(ws,5,'Browser.getWindowForTarget',{'targetId':tab_id})
         elif msg.get('id')==5:
-            if msg.get('result',{}).get('windowId')!=binding['chrome_window']:
+            if msg.get('result',{}).get('windowId')!=expected_window:
                 Gtk.main_quit()
                 return
             send(ws,1,'Page.enable')
@@ -595,7 +621,10 @@ def browser_authorize(stage,binary,account_key,email):
             return
         socket.connect('message',browser_message)
         socket.connect('closed',lambda *_: Gtk.main_quit())
-        send(socket,5,'Browser.getWindowForTarget',{'targetId':tab_id})
+        if expected_window is None:
+            send(socket,8,'Browser.getWindowForTarget',{'targetId':binding['page_target']})
+        else:
+            send(socket,5,'Browser.getWindowForTarget',{'targetId':tab_id})
 
     def tick_ui():
         nonlocal login_selected,trusted,link,oauth_state,connecting,tab_id,callback_poll
@@ -640,6 +669,10 @@ def browser_authorize(stage,binary,account_key,email):
                     ws=target['webSocketDebuggerUrl']
                     if ws!=f'ws://127.0.0.1:{port}/devtools/page/{tab_id}':
                         raise ValueError('tab endpoint')
+                    (stage/'browser-window.json').write_text(json.dumps({
+                        field: binding[field] for field in
+                        ('browser_pid','port','profile','process_start','page_target')
+                    }),encoding='ascii')
                     (stage/'browser-target').write_text(tab_id,encoding='ascii')
                     connecting=True
                     message=Soup.Message.new('GET',ws)

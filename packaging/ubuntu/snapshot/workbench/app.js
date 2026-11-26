@@ -578,6 +578,21 @@ function setView(view) {
 // reads the open page; sending, checking credentials and retrying stay explicit.
 let recordsTab = 'flow';
 let geminiRecordLoad = null;
+
+function geminiRecordModelLabel(model) {
+  if (typeof model !== 'string' || !model.trim()) return '—';
+  const match = /^(gemini-3\.8-flash|gemini-4-(?:hydrogen|neon|carbon))(?:-(low|medium|high|xhigh))?$/.exec(model);
+  if (!match) return model;
+  const names = {
+    'gemini-3.8-flash': 'Gemini 3.8 Flash',
+    'gemini-4-hydrogen': 'Gemini 4 Hydrogen',
+    'gemini-4-neon': 'Gemini 4 Neon',
+    'gemini-4-carbon': 'Gemini 4 Carbon'
+  };
+  const effort = match[2] ? ' · ' + chatEffortLabels[match[2]] + '档' : '';
+  return names[match[1]] + effort;
+}
+
 async function refreshGeminiRecords() {
   if (geminiRecordLoad) return geminiRecordLoad;
   const summary=$('geminiRecordSummary');
@@ -596,9 +611,9 @@ async function refreshGeminiRecords() {
         const archived=r.status==='unknown' && String(r.note || '').includes('已归档');
         const elapsed=Number.isFinite(r.finished) && Number.isFinite(r.created) && r.finished>=r.created
           ? ((r.finished-r.created).toFixed(1)+' 秒') : '—';
-        return `<tr><td>${esc(accounts.get(r.account_key) || '—')}</td><td>${esc(archived?'已归档 · 结果待核对':statuses[r.status] || '状态待核对')}</td><td>${esc(Number.isFinite(r.created)?dateTime(r.created):'—')}</td><td>${esc(elapsed)}</td><td><code>${esc(r.request_id || '—')}</code></td><td>${r.readiness_probe ? '<strong>自查请求</strong> · ' : ''}${esc(r.note || '—')}<details data-gemini-request="${esc(r.request_id || '')}"><summary>查看请求和返回</summary><div class="subtle">展开后读取详情。</div></details></td></tr>`;
+        return `<tr><td>${esc(accounts.get(r.account_key) || '—')}</td><td title="${esc(r.model || '')}">${esc(geminiRecordModelLabel(r.model))}</td><td>${esc(archived?'已归档 · 结果待核对':statuses[r.status] || '状态待核对')}</td><td>${esc(Number.isFinite(r.created)?dateTime(r.created):'—')}</td><td>${esc(elapsed)}</td><td><code>${esc(r.request_id || '—')}</code></td><td>${r.readiness_probe ? '<strong>自查请求</strong> · ' : ''}${esc(r.note || '—')}<details data-gemini-request="${esc(r.request_id || '')}"><summary>查看请求和返回</summary><div class="subtle">展开后读取详情。</div></details></td></tr>`;
       }).join('');
-      const markup=rows ? `<table><thead><tr><th>账号</th><th>状态</th><th>提交时间</th><th>总耗时</th><th>请求编号</th><th>结果说明</th></tr></thead><tbody>${rows}</tbody></table>`
+      const markup=rows ? `<table><thead><tr><th>账号</th><th scope="col">模型</th><th>状态</th><th>提交时间</th><th>总耗时</th><th>请求编号</th><th>结果说明</th></tr></thead><tbody>${rows}</tbody></table>`
         : '<div class="empty">还没有 Gemini 请求记录。</div>';
       if (!table.querySelector('details[open]') && table.innerHTML!==markup) table.innerHTML=markup;
     } catch (_) {
@@ -2421,10 +2436,63 @@ function flowNetworkSlot(binding) {
   return `<p class="account-check-status" data-flow-network-slot>网络位 · ${esc(label)}</p>`;
 }
 
+const renderedFlowAccountMarkup = new WeakMap();
+
+function syncFlowAccountCards(table, issueSummary, cards) {
+  let grid = table.querySelector('[data-flow-account-grid]');
+  if (!grid) {
+    grid = document.createElement('div');
+    grid.className = 'account-grid';
+    grid.dataset.flowAccountGrid = '';
+    table.replaceChildren(grid);
+  }
+
+  const template = document.createElement('template');
+  const oldSummary = grid.previousElementSibling;
+  if (!issueSummary) oldSummary?.remove();
+  else if (renderedFlowAccountMarkup.get(oldSummary) !== issueSummary) {
+    template.innerHTML = issueSummary;
+    const summary = template.content.firstElementChild;
+    renderedFlowAccountMarkup.set(summary, issueSummary);
+    if (oldSummary) oldSummary.replaceWith(summary);
+    else grid.before(summary);
+  }
+
+  const existing = new Map([...grid.children].map(card => [card.dataset.flowAccountKey, card]));
+  const currentKeys = new Set(cards.map(card => card.key));
+  for (const [key, card] of existing) {
+    if (!currentKeys.has(key)) card.remove();
+  }
+
+  let previous = null;
+  for (const {key, markup, cooldownEnd} of cards) {
+    let card = existing.get(key);
+    const oldDeadline = Number(card?.querySelector('[data-cooldown-end]')?.dataset.cooldownEnd);
+    const now = Date.now();
+    const cooldownRestarted = cooldownEnd !== null && cooldownEnd > now && oldDeadline <= now;
+    if (renderedFlowAccountMarkup.get(card) !== markup || cooldownRestarted) {
+      template.innerHTML = markup;
+      const updated = template.content.firstElementChild;
+      renderedFlowAccountMarkup.set(updated, markup);
+      card?.replaceWith(updated);
+      card = updated;
+    }
+    if (card.parentElement !== grid || card.previousElementSibling !== previous) {
+      grid.insertBefore(card, previous ? previous.nextElementSibling : grid.firstElementChild);
+    }
+    const clock = card.querySelector('.account-cooldown');
+    if (clock && cooldownEnd !== null && Number(clock.dataset.cooldownEnd) !== cooldownEnd) {
+      clock.dataset.cooldownEnd = String(cooldownEnd);
+    }
+    previous = card;
+  }
+}
+
 function renderAccounts() {
-  const opened = [...document.querySelectorAll('.account-details[open] summary')].map(e=>e.getAttribute('aria-controls'));
-  const focusedDetail = document.activeElement?.closest('.account-details')?.querySelector('summary')?.getAttribute('aria-controls');
   const table = $('realAccountTable');
+  const activeControl = document.activeElement;
+  const opened = [...table.querySelectorAll('.account-details[open] summary')].map(e=>e.getAttribute('aria-controls'));
+  const focusedDetail = activeControl?.closest('.account-details')?.querySelector('summary')?.getAttribute('aria-controls');
   const expanded = new Set([...table.querySelectorAll('[data-account-fold][open]')].map(detail => detail.dataset.accountFold));
   const focusedFold = document.activeElement?.closest('summary')?.parentElement?.dataset.accountFold;
   const focusedRetry = document.activeElement?.closest('select[data-retry-project]')?.dataset.retryProject;
@@ -2497,7 +2565,7 @@ function renderAccounts() {
   const issueSummary = affectedAccounts.size ? `<details class="account-issue-summary" data-account-fold="pool-alerts"><summary><strong>需关注</strong> <span>${affectedAccounts.size} 个账号</span></summary><div class="account-issue-summary-items">${Array.from(issueCounts.values()).map(issue => `<span>${esc(issue.title)} <b>${issue.count}</b></span>`).join('')}</div></details>` : '';
   // An in-progress drag owns the DOM; a snapshot refresh must not rebuild the cards mid-drag.
   if (accountDrag.key) return;
-  $("realAccountTable").innerHTML = `${issueSummary}<div class="account-grid">${accounts.map((item) => {
+  const cards = accounts.map((item) => {
     const identity = item.email || item.label || item.profile;
     const official = officialAccount(item);
     const auditedFlowRow=flowReadinessNow.rows.get(item.profile);
@@ -2601,26 +2669,33 @@ function renderAccounts() {
       geminiIssues.map(issue => `<p><strong>Gemini · ${esc(issue.title)}</strong><br>${esc(issue.impact || '')} ${esc(issue.action || '')}</p>`).join(''),
       geminiFallback ? `<p><strong>Gemini：</strong>${esc(geminiFallback)}</p>` : '',
     ]).join('');
-    return `<article class="account-card${cardState}"${flow ? '' : ` draggable="true" data-drag-key="${esc(quotaKey)}"`}>
+    const markup = `<article class="account-card${cardState}"${flow ? ` data-flow-account-key="${accountKey}"` : ` draggable="true" data-drag-key="${esc(quotaKey)}"`}>
       <div class="account-card-heading">${accountAvatarMarkup(identity, avatarModels)}<div class="account-identity"><span class="account-alias">${esc(item.label || item.profile)}</span><h3 title="${esc(identity)}">${esc(identity)}</h3></div>${flow ? `<span class="account-login ${signIn ? 'is-login-required' : item.flow_login === 'verified' ? 'is-ready' : ''}">${esc(login)}</span>` : ''}
         <div class="account-detail-anchor"><details class="account-details"><summary aria-label="查看 ${esc(identity)} 的详细状态" aria-controls="account-detail-${accountKey}">详情</summary></details><div id="account-detail-${accountKey}" class="account-detail-popup"><strong>账号状态详情</strong>${flow ? `<p>Flow：${esc(flowStatusText)} · ${esc(freshness + observed)}。${hasBalance ? '剩余 ' + esc(balance) + ' 积分。' : ''}未提供积分总额度。</p>${coolingInfo ? `<p>${esc(coolingInfo)}</p>` : ''}<p>Flow · ${esc(flowPerformance)}</p>` : `${officialDetails(official)}<p>Gemini · ${esc(gemPerformance)}</p>`}${issues.length ? `<div class="account-detail-issues"><strong>状态说明</strong>${issues.map(issue => `<p><b>${esc(issue.title)}</b><br>${esc(issue.impact)} ${esc(issue.action)}</p>`).join('')}</div>` : ''}</div></div></div>
-      <div class="account-services account-services-single">${flow ? `<div class="account-service account-service-flow${flowNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc(('Flow：' + flowStatusText))}" title="${esc(('Flow：' + flowStatusText))}"><div class="account-service-heading"><span>Flow</span><strong class="account-health ${flowPaused ? 'is-paused' : cooling ? 'is-cooling' : flowRow?.status!=='ready' ? 'is-unknown' : ''}">${esc(flowStatusText)}</strong></div><div class="account-flow-value"><div title="${esc(flowBalanceTitle)}"><strong>${esc(balance)}</strong><small class="account-quota-reset">下次积分到账 ${esc(flowNextCredit || '待官方更新')}${flowNextCredit && !item.flow_balance_fresh ? '（上次读取）' : ''}</small></div>${cooling ? `<div class="account-cooldown" data-risk-paused="${flowPaused}"${cooldownEnd !== null ? ` data-cooldown-end="${cooldownEnd}"` : ' aria-label="冷却中，剩余时间待核对"'}><span class="account-cooldown-time">—</span><span class="account-cooldown-label">冷却中</span></div>` : '<span class="account-credit-icon" aria-hidden="true">✦</span>'}</div></div>` : `<div class="account-service account-service-gemini${geminiNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}" title="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}"><div class="account-service-heading"><span>Gemini</span><strong class="account-health${geminiReady && !geminiNeedsAttention ? '' : ' is-unknown'}">${esc(geminiStatusText)}</strong></div>${item.gemini_removed ? '' : `<div data-account-quota="${accountKey}">${quotaView.html}</div>`}</div>`}</div>
+      <div class="account-services account-services-single">${flow ? `<div class="account-service account-service-flow${flowNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc(('Flow：' + flowStatusText))}" title="${esc(('Flow：' + flowStatusText))}"><div class="account-service-heading"><span>Flow</span><strong class="account-health ${flowPaused ? 'is-paused' : cooling ? 'is-cooling' : flowRow?.status!=='ready' ? 'is-unknown' : ''}">${esc(flowStatusText)}</strong></div><div class="account-flow-value"><div title="${esc(flowBalanceTitle)}"><strong>${esc(balance)}</strong><small class="account-quota-reset">下次积分到账 ${esc(flowNextCredit || '待官方更新')}${flowNextCredit && !item.flow_balance_fresh ? '（上次读取）' : ''}</small></div>${cooling ? `<div class="account-cooldown" data-risk-paused="${flowPaused}"${cooldownEnd !== null ? '' : ' aria-label="冷却中，剩余时间待核对"'}><span class="account-cooldown-time">—</span><span class="account-cooldown-label">冷却中</span></div>` : '<span class="account-credit-icon" aria-hidden="true">✦</span>'}</div></div>` : `<div class="account-service account-service-gemini${geminiNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}" title="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}"><div class="account-service-heading"><span>Gemini</span><strong class="account-health${geminiReady && !geminiNeedsAttention ? '' : ' is-unknown'}">${esc(geminiStatusText)}</strong></div>${item.gemini_removed ? '' : `<div data-account-quota="${accountKey}">${quotaView.html}</div>`}</div>`}</div>
       ${flow ? flowNetworkSlot(item.exit_info) : ''}
       ${flow && flowReason?.showOnCard ? flowNotice : ''}
       ${!flow && geminiRow?.checking ? `<p class="account-check-status">Gemini · ${esc(geminiRow.note || '正在检查云端响应')}</p>` : ''}
       ${diagnostics ? `<details class="account-alert" data-account-fold="alert-${accountKey}"><summary><strong>${needsAttention || flow && flowPaused ? '异常详情' : '状态说明'}</strong><span>${flow ? 'Flow' : 'Gemini'}</span></summary><div class="account-alert-body">${diagnostics}</div></details>` : ''}
       ${flow ? `<div class="account-card-footer"><details class="account-retry" data-account-fold="retry-${accountKey}"><summary>切号备用项目</summary><p class="subtle">切号重试将在此账号选定的项目生成，可能消耗积分。未指定时不会用此账号切号。</p><select aria-label="切号备用项目" data-retry-project="${accountKey}"><option value="">不指定</option>${accountProjects.map(p => `<option value="${esc(p.key)}" ${p.key === selectedRetryProject ? 'selected' : ''}>${esc(p.title)} · ${esc(shortId(p.source_id))}</option>`).join('')}</select><button class="text-link" type="button" data-save-retry-project="${accountKey}">保存备用项目</button></details>${removeFlow ? `<details class="account-preferences" data-account-fold="flow-actions-${accountKey}"><summary>账号操作</summary><div class="account-card-actions">${removeFlow}</div></details>` : ''}</div>` : removeGemini ? `<div class="account-card-footer"><details class="account-preferences" data-account-fold="actions-${accountKey}"><summary>账号操作</summary><div class="account-card-actions">${removeGemini}</div></details></div>` : ''}
       <div class="account-card-actions">${flow ? remoteFlow+govRelease : authControl+geminiVerify}${flow && flowPaused ? `<button class="button button-light" type="button" data-resume-flow="${accountKey}"${pageIncident ? ` data-incident="${esc(pageIncident.id)}"` : ''}>已核查，恢复 Flow</button>` : ''}</div></article>`;
-  }).join("")}</div>`;
+    return {key: accountKey, markup, cooldownEnd};
+  });
+  if (flow) syncFlowAccountCards(table, issueSummary, cards);
+  else table.innerHTML = `${issueSummary}<div class="account-grid">${cards.map(card => card.markup).join('')}</div>`;
   updateAccountUsageBars();
   updateAccountCooldowns();
-  for (const id of opened) { const summary = document.querySelector(`[aria-controls="${id}"]`); if (summary) summary.parentElement.open = true; }
+  for (const id of opened) {
+    const detail = table.querySelector(`[aria-controls="${id}"]`)?.parentElement;
+    if (detail && !detail.open) detail.open = true;
+  }
   for (const detail of table.querySelectorAll('[data-account-fold]')) {
     const key = detail.dataset.accountFold;
-    detail.open = expanded.has(key);
-    if (key === focusedFold) detail.querySelector('summary').focus({preventScroll:true});
+    if (detail.open !== expanded.has(key)) detail.open = expanded.has(key);
+    if (key === focusedFold && !activeControl.isConnected) detail.querySelector('summary').focus({preventScroll:true});
   }
-  if (focusedDetail) document.querySelector(`[aria-controls="${focusedDetail}"]`)?.focus({preventScroll:true});
+  if (focusedDetail && !activeControl.isConnected)
+    table.querySelector(`[aria-controls="${focusedDetail}"]`)?.focus({preventScroll:true});
 }
 
 try {

@@ -1,5 +1,6 @@
 import asyncio
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
@@ -173,6 +174,55 @@ class FlowVideoPipeline(unittest.IsolatedAsyncioTestCase):
                         driver.activate_and_confirm.assert_not_awaited()
                         if outcome == 'draft':
                             page.reload.assert_not_awaited()
+
+    async def test_upload_dialog_keeps_review_evidence_and_switches_only_before_submit(self):
+        with flow_modules() as runtime, tempfile.TemporaryDirectory() as directory:
+            from studiowright.flow.page import FLOW_ROOT, ReferenceUploadBlocked
+            from studiowright.studio import Studio
+
+            for stage in ('preparing', 'submitting'):
+                with self.subTest(stage=stage), patch('task_coordinator.Coordinator', return_value=SimpleNamespace(events=lambda _: [])):
+                    project, backup_project = str(uuid.uuid4()), str(uuid.uuid4())
+                    source = {'id': 'source-job', 'profile': 'primary', 'project_id': project,
+                              'kind': 'video', 'params': '{"count":1,"origin_console_task":"fixture"}',
+                              'result': json.dumps({'stage': stage, 'media_ids': []})}
+                    studio = Studio.__new__(Studio)
+
+                    def update_job(_, *, result, **outcome):
+                        source.update(outcome, result=json.dumps(result))
+
+                    studio.store = SimpleNamespace(job=lambda _: source, update_job=update_job)
+                    shot = Path(directory) / 'source-job.png'
+                    studio._capture_failure_page = AsyncMock(return_value=shot)
+
+                    async def fail_upload(*args, **kwargs):
+                        error = ReferenceUploadBlocked('reference upload was stopped')
+                        await studio._fail('source-job', error, FLOW_ROOT)
+                        raise error
+
+                    adapter = SimpleNamespace(discover=lambda: ['primary', 'backup'], source_jobs=lambda _: [],
+                                              source_jobs_for_task=lambda *_: [source], run=fail_upload)
+                    console = runtime.Console(Path(directory) / stage, adapter, test=True)
+                    for profile, project_id in (('primary', project), ('backup', backup_project)):
+                        console.store.update_account(profile, profile + '@example.test', 'verified')
+                        console.store.project(profile, project_id, 'FLOW+' + profile)
+                        console.insights.record(profile, 100)
+                    initial = console.store.create_task('primary', project, 'video', {'count': 1}, str(uuid.uuid4()))
+                    await console.execute(console.store.claim(set()))
+                    retry = console.store.retry_detail(initial['id'])
+                    self.assertIn(shot.name, retry['attempts'][0]['error'])
+                    if stage == 'preparing':
+                        self.assertEqual(retry['state'], 'pending_switch')
+                        accounts = [{'profile': name, 'state': 'verified', 'generation_state': 'not_cooling_down',
+                                     'risk_paused': False} for name in ('primary', 'backup')]
+                        with patch.object(runtime, 'account_status', return_value=accounts):
+                            console.schedule_pending_switches()
+                        switched = console.store.retry_detail(initial['id'])
+                        self.assertEqual([(a['profile'], a['status']) for a in switched['attempts']],
+                                         [('primary', 'failed'), ('backup', 'queued')])
+                    else:
+                        self.assertEqual(retry['state'], 'needs_review')
+                        self.assertIsNone(console.store.claim(set()))
 
     async def test_submitted_videos_give_slot_to_other_accounts_only(self):
         class ControlledAdapter:

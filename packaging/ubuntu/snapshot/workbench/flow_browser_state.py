@@ -76,6 +76,37 @@ def _pages(key, pid, port, *, include_non_flow=False):
             (include_non_flow or p.get('url', '').startswith('https://flow.google.com/'))]
 
 
+def registered_authorization_window(key):
+    """Read the login-verified Chrome registration for a single native window."""
+    from contextlib import closing
+    from task_window_registry import process_identity
+
+    if not REGISTRY.is_file() or REGISTRY.is_symlink():
+        return None
+    try:
+        with closing(sqlite3.connect(REGISTRY.as_uri() + '?mode=ro', uri=True, timeout=2)) as db:
+            row = db.execute('SELECT pid,port FROM flow_windows WHERE account_key=?', (key,)).fetchone()
+        if not row:
+            return None
+        previous_pid, port = row
+        if type(port) is not int or not 1 <= port <= 65535:
+            return None
+        pid = _live_browser(key, previous_pid, port)
+        profile, process_start = process_identity(pid, key, port)
+        pages = _pages(key, pid, port)
+        windows = focus_call('List', pid)
+        if not pages or len(windows) != 1:
+            return None
+        window_id = windows[0].get('id')
+        target = pages[0].get('id')
+        if type(window_id) is not int or window_id <= 0 or not isinstance(target, str) or not target:
+            return None
+        return {'browser_pid':pid, 'port':port, 'profile':profile, 'process_start':process_start,
+                'page_target':target, 'window_id':window_id}
+    except (OSError, ValueError, sqlite3.Error, subprocess.SubprocessError):
+        return None
+
+
 def flow_only_ready(key):
     with registry() as db:
         row = db.execute('SELECT pid,port FROM flow_windows WHERE account_key=?', (key,)).fetchone()

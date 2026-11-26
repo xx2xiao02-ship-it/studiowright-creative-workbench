@@ -238,8 +238,7 @@ class RealAdapter:
             studio.console_task_id = task['id']
             studio.console_attempt_ordinal = task.get('attempt_ordinal', 0)
         if reference_files:
-            studio.configure_reference_uploads(project, reference_files,
-                library_db=self.root / 'material-library/library.db', email=account.get('email'))
+            studio.configure_reference_uploads(project, reference_files, email=account.get('email'))
         async with studio:
             if kind in {'sync', 'session_import'}:
                 studio.session._onboarding = True

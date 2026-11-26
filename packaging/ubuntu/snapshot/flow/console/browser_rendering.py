@@ -1,8 +1,7 @@
 """Ubuntu Chrome rendering compatibility; upstream files and auth stay untouched."""
 import asyncio
-from contextlib import asynccontextmanager, closing, suppress
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-import sqlite3
 import sys
 import time
 from filelock import FileLock, Timeout
@@ -260,23 +259,6 @@ async def select_offered_model(self, pane, label):
     await self.page.wait_for_timeout(200)
 
 
-def is_same_project_image(database, path, profile, email, project):
-    from hashlib import file_digest
-
-    if path.suffix.lower() not in {'.jpg', '.jpeg', '.png', '.webp'} or not database.is_file():
-        return False
-    try:
-        with path.open('rb') as file:
-            digest = file_digest(file, 'sha256').hexdigest()
-        with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)) as db:
-            return db.execute("""SELECT 1 FROM origins o JOIN assets a ON a.id=o.asset_id
-                WHERE a.sha256=? AND a.media_type='image' AND o.source='studiowright'
-                AND o.account_id=? AND lower(o.account_email)=? AND o.project_id=? LIMIT 1""",
-                (digest, profile, email.lower(), project)).fetchone() is not None
-    except (OSError, sqlite3.Error):
-        return False
-
-
 def reference_dialog_choice(labels):
     positive = {'我同意', '同意', 'I agree', 'Agree'}
     cancel = {'取消', 'Cancel'}
@@ -322,9 +304,8 @@ async def handle_reference_dialog(page, dialogs, email, project):
 
 
 class RenderingStudio(Studio):
-    def configure_reference_uploads(self, project, files, *, library_db=None, email=None):
-        self._scoped_references = (project, tuple(files))
-        self._reference_consent = (library_db, email)
+    def configure_reference_uploads(self, project, files, *, email):
+        self._scoped_references = (project, tuple(files), email)
 
     async def _generation_page(self, project_id):
         lease, flow = await super()._generation_page(project_id)
@@ -341,18 +322,16 @@ class RenderingStudio(Studio):
             return await super()._media_ids(flow, refs)
         from urllib.parse import urlsplit
         from flow_references import reference_ids
-        project, files = scoped
+        project, files, email = scoped
         url = urlsplit(flow.page.url)
         if (tuple(refs) != files or flow.project_id != project or url.scheme != 'https'
                 or url.netloc != 'flow.google.com' or url.path.rstrip('/') != '/project/' + project):
             raise ValueError('参考图目标项目页面不一致，已停止生成。')
         results = []
-        library_db, email = self._reference_consent
-        handler = None
-        if library_db and email and await asyncio.to_thread(
-                lambda: all(is_same_project_image(library_db, Path(path), self.profile, email, project) for path in files)):
-            async def handler(dialogs):
-                return await handle_reference_dialog(flow.page, dialogs, email, project)
+        async def handle_dialog(dialogs):
+            return await handle_reference_dialog(flow.page, dialogs, email, project)
+
+        handler = handle_dialog if email else None
         # Do not consult the upstream hash cache, which only keys on project ID.
         # Each upload is performed inside the verified account's project page.
         try:

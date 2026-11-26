@@ -513,7 +513,7 @@ class RealPool:
         with self.connection() as db:
             rows = db.execute('''SELECT r.request_id,r.account_key,r.selection,r.status,r.created,r.finished,r.note,
                                  CASE WHEN j.request_id IS NOT NULL THEN 'official_antigravity_cli' WHEN p.request_id IS NULL THEN 'legacy' ELSE 'pooldesk' END AS engine,
-                                 p.stage AS engine_stage,p.engine_version AS engine_version,
+                                 p.stage AS engine_stage,p.engine_version AS engine_version,j.model,
                                  COALESCE(j.readiness_probe,0) AS readiness_probe
                                  FROM requests r LEFT JOIN pooldesk_attempts p ON p.request_id=r.request_id
                                  LEFT JOIN official_jobs j ON j.request_id=r.request_id

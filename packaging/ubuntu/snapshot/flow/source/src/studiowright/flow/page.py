@@ -86,6 +86,10 @@ class UpscaleRefused(FlowError):
         self.unusual = unusual
 
 
+class ReferenceUploadBlocked(FlowError):
+    """A dialog stopped reference upload before generation was submitted."""
+
+
 class PartialUpload(FlowError):
     """Some files of an upload finished and some did not; ``results`` are the finished ones,
     so they can be recorded and not uploaded again."""
@@ -735,7 +739,7 @@ class FlowPage:
                 dialogs = self.page.get_by_role('dialog').filter(visible=True)
                 if await dialogs.count():
                     if dialog_handler is None or dialog_handled or not await dialog_handler(dialogs):
-                        raise FlowError("Flow 上传被弹窗拦截，未获自动处理授权，请在原账号窗口核对。")
+                        raise ReferenceUploadBlocked("Flow 上传被弹窗拦截，请在原账号窗口核对。")
                     dialog_handled = True
                 await watch.wait(1.0)
         results: list[replies.UploadResult] = []

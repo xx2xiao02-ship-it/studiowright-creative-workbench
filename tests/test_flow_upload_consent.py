@@ -1,46 +1,62 @@
 import ast
-import hashlib
+import asyncio
 from pathlib import Path
-import sqlite3
-import tempfile
+import sys
+from types import SimpleNamespace
 import unittest
-from contextlib import closing
+from unittest.mock import AsyncMock, patch
 
 
 SOURCE = Path(__file__).resolve().parents[1] / 'packaging/ubuntu/snapshot/flow/console/browser_rendering.py'
 
 
-class FlowUploadConsent(unittest.TestCase):
+class FlowUploadConsent(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         tree = ast.parse(SOURCE.read_bytes())
-        names = {'reference_dialog_choice', 'is_same_project_image'}
-        self.scope = dict(sqlite3=sqlite3, closing=closing)
-        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
-        exec(compile(ast.Module(body=functions, type_ignores=[]), str(SOURCE), 'exec'), self.scope)
+        choice = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                      and node.name == 'reference_dialog_choice')
+        studio = next(node for node in tree.body if isinstance(node, ast.ClassDef)
+                      and node.name == 'RenderingStudio')
+        studio.body = [node for node in studio.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                       and node.name in ('configure_reference_uploads', '_media_ids')]
+        self.scope = dict(Studio=object, asyncio=asyncio, Path=Path, handle_reference_dialog=AsyncMock(return_value=True))
+        exec(compile(ast.Module(body=[choice, studio], type_ignores=[]), str(SOURCE), 'exec'), self.scope)
 
-    def test_option_count_and_labels(self):
+    def test_previous_button_count_rules(self):
         choose = self.scope['reference_dialog_choice']
-        self.assertEqual(choose(['我同意']), '我同意')
-        self.assertEqual(choose(['取消', '我同意']), '我同意')
-        self.assertEqual(choose(['我同意', '查看说明', '取消']), '取消')
-        for labels in (['删除'], ['删除', '取消'], ['我同意', '同意'], ['取消', '取消', '我同意'],
-                       ['我同意', '取消', '稍后', '帮助']):
-            self.assertIsNone(choose(labels))
+        cases = (
+            (['我同意'], '我同意'),
+            (['取消'], '取消'),
+            (['取消', '我同意'], '我同意'),
+            (['I agree', 'Cancel'], 'I agree'),
+            (['我同意', '查看说明', '取消'], '取消'),
+            (['我同意', '取消', '稍后', '帮助'], None),
+            (['取消', '取消', '我同意'], None),
+            (['我同意', '同意'], None),
+            (['删除', '取消'], None),
+            (['我同意', '查看说明'], None),
+            (['我同意', '查看说明', '稍后'], None),
+            (['删除'], None),
+            ([], None),
+        )
+        for labels, expected in cases:
+            with self.subTest(labels=labels):
+                self.assertEqual(choose(labels), expected)
 
-    def test_generated_image_must_match_both_account_and_project(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            dbpath, image = root/'library.db', root/'frame.jpg'
-            image.write_bytes(b'generated image bytes')
-            digest = hashlib.sha256(image.read_bytes()).hexdigest()
-            with sqlite3.connect(dbpath) as db:
-                db.executescript("""CREATE TABLE assets(id,sha256,media_type);
-                    CREATE TABLE origins(asset_id,source,account_id,account_email,project_id);""")
-                db.execute("INSERT INTO assets VALUES('id',?,'image')", (digest,))
-                db.execute("INSERT INTO origins VALUES('id','studiowright','profile','me@example.test','project')")
-            match = self.scope['is_same_project_image']
-            self.assertTrue(match(dbpath, image, 'profile', 'me@example.test', 'project'))
-            self.assertFalse(match(dbpath, image, 'profile', 'me@example.test', 'other'))
-            self.assertFalse(match(dbpath, image, 'other', 'me@example.test', 'project'))
-            image.write_bytes(b'external image bytes')
-            self.assertFalse(match(dbpath, image, 'profile', 'me@example.test', 'project'))
+    async def test_new_first_frame_uses_dialog_handler_without_library_history(self):
+        studio = self.scope['RenderingStudio']()
+        project, email = 'sample', 'owner@example.test'
+        files = ('new-first-frame.png',)
+        studio.configure_reference_uploads(project, files, email=email)
+        page = SimpleNamespace(url='https://flow.google.com/project/' + project)
+        button_dialog = object()
+
+        async def upload(paths, *, dialog_handler):
+            self.assertEqual(paths, [Path(files[0])])
+            self.assertTrue(await dialog_handler(button_dialog))
+            return [SimpleNamespace(media_id='frame', name=files[0])]
+
+        flow = SimpleNamespace(page=page, project_id=project, upload=upload)
+        with patch.dict(sys.modules, {'flow_references': SimpleNamespace(reference_ids=tuple)}):
+            self.assertEqual(await studio._media_ids(flow, files), ('frame',))
+        self.scope['handle_reference_dialog'].assert_awaited_once_with(page, button_dialog, email, project)

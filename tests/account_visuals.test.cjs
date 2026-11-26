@@ -12,6 +12,19 @@ function load(name, context) {
   vm.runInContext(match[0], context);
 }
 
+test('Gemini history names stored models and thinking tiers without guessing missing models', () => {
+  const context = vm.createContext({chatEffortLabels:{low:'低',medium:'中',high:'高',xhigh:'超高'}});
+  load('geminiRecordModelLabel', context);
+  const label = model => context.geminiRecordModelLabel(model);
+  assert.equal(label('gemini-3.8-flash-medium'), 'Gemini 3.8 Flash · 中档');
+  assert.equal(label('gemini-4-hydrogen-low'), 'Gemini 4 Hydrogen · 低档');
+  assert.equal(label('gemini-4-neon-xhigh'), 'Gemini 4 Neon · 超高档');
+  assert.equal(label('gemini-4-carbon-high'), 'Gemini 4 Carbon · 高档');
+  assert.equal(label('gemini-4-carbon'), 'Gemini 4 Carbon');
+  assert.equal(label('historical-model'), 'historical-model');
+  assert.equal(label(null), '—');
+});
+
 test('automatic Gemini chats only offer models with an eligible account', () => {
   const flash = {id:'gemini-3.8-flash-medium', family:'gemini-3.8-flash', effort:'medium'};
   const hydrogen = {id:'gemini-4-hydrogen-medium', family:'gemini-4-hydrogen', effort:'medium'};

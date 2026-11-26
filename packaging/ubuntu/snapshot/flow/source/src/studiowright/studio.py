@@ -39,6 +39,7 @@ from studiowright.flow.page import (
     FlowError,
     FlowPage,
     PartialUpload,
+    ReferenceUploadBlocked,
     SubmissionRejectedUnusual,
     UnusualActivity,
     UpscaleRefused,
@@ -507,7 +508,7 @@ class Studio:
                     and isinstance(exc, SubmissionRejectedUnusual)):
                 result["retry_evidence"] = "provider_rejected_unusual"
             elif (stage == "preparing" and not media
-                  and isinstance(exc, (PlaywrightTimeout, TimeoutError, ConnectionError))):
+                  and isinstance(exc, (ReferenceUploadBlocked, PlaywrightTimeout, TimeoutError, ConnectionError))):
                 result["retry_evidence"] = "transient_before_submit"
             else:
                 result["retry_evidence"] = "not_safe_to_repeat"

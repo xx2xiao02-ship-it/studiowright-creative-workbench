@@ -11,9 +11,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'packaging/ubuntu/snapshot/workbench'))
+from flow_browser_state import registered_authorization_window
 from gemini_authorization import GeminiAuthorization
 from live_pool import RealPool
-from official_reauth import PROBE_AUTH, close_authorization_tab
+from official_reauth import PROBE_AUTH, authorization_window, close_authorization_tab
 from official_pool import AUTH_UNSENT, OfficialPool, READINESS_PROMPT, READINESS_REPLY
 
 
@@ -202,6 +203,27 @@ class GeminiAuthorizationTest(unittest.TestCase):
         activation.run()
         self.assertEqual(seen, ['first'])
         self.assertEqual(activation.status()['state'], 'stopped')
+
+    def test_initial_authorization_uses_verified_browser_without_a_fixed_project(self):
+        with tempfile.TemporaryDirectory() as folder:
+            registry = Path(folder) / 'desktops.sqlite3'
+            with sqlite3.connect(registry) as db:
+                db.execute('CREATE TABLE flow_windows(account_key,pid,port,window_id)')
+                db.execute('INSERT INTO flow_windows VALUES(?,?,?,?)', ('account-key', 42, 9300, 13))
+            pages = [{'id':'FLOW', 'url':'https://flow.google.com/'}]
+            with patch('flow_browser_state.REGISTRY', registry), \
+                    patch('task_window_registry.TaskWindowRegistry.get', return_value=None), \
+                    patch('task_window_registry.process_identity', return_value=('account-profile','1')), \
+                    patch('flow_browser_state._live_browser', return_value=43), \
+                    patch('flow_browser_state._pages', return_value=pages), \
+                    patch('flow_browser_state.focus_call', return_value=[{'id': 17}]) as focus:
+                self.assertEqual(authorization_window('account-key'), {
+                    'browser_pid':43, 'port':9300, 'profile':'account-profile', 'process_start':'1',
+                    'page_target':'FLOW', 'window_id':17,
+                })
+                focus.return_value = [{'id': 17}, {'id': 18}]
+                self.assertIsNone(registered_authorization_window('account-key'))
+                self.assertIsNone(registered_authorization_window('other-account'))
 
     def test_only_recorded_google_tab_is_closed(self):
         binding = {'browser_pid': 42, 'port': 9300, 'profile': 'a', 'process_start': '1', 'page_target': 'FLOW'}
