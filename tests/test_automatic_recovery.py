@@ -13,7 +13,8 @@ from test_flow_regressions import fixture_directory
 
 
 class AutomaticRecoverySafety(unittest.IsolatedAsyncioTestCase):
-    async def run_case(self, page='binding', busy=False, review=None, repairable=True, reset_draft=False):
+    async def run_case(self, page='binding', busy=False, review=None, repairable=True, reset_draft=None,
+                       maintenance=False):
         with fixture_directory() as directory:
             controller=types.ModuleType('shared_session_controller')
             controller.flow_runtime=lambda:(None,types.SimpleNamespace(locks_dir=lambda:directory))
@@ -25,10 +26,14 @@ class AutomaticRecoverySafety(unittest.IsolatedAsyncioTestCase):
                  patch.object(recovery,'inspect_page',AsyncMock(return_value=page)), \
                  patch.object(recovery,'repair',action), \
                  patch.object(recovery,'review_hold',return_value=False), \
+                 patch.object(recovery,'operator_dispatch_paused',return_value=False), \
                  patch.object(recovery.subprocess,'check_output',return_value='active'):
                 lifecycle.return_value.status.return_value=[]
-                result=await recovery.recover(dict(accounts=[account],bindings=[],busy=['fixture'] if busy else [],
-                                                   safe_only=True,reset_draft=reset_draft))
+                payload = dict(accounts=[account],bindings=[],busy=['fixture'] if busy else [],
+                               safe_only=True,operator_dispatch_paused=maintenance)
+                if reset_draft is not None:
+                    payload['reset_draft'] = reset_draft
+                result=await recovery.recover(payload)
             return result,action
 
     async def test_recoverable_page_uses_guarded_repair(self):
@@ -46,11 +51,14 @@ class AutomaticRecoverySafety(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['fixture']['page'],'unconfirmed')
         action.assert_not_awaited()
 
-    async def test_task_drafts_and_login_challenges_are_left_in_place(self):
+    async def test_plain_inspection_and_maintenance_do_not_reset_drafts(self):
         result,action=await self.run_case(page='draft')
         self.assertEqual(result['fixture']['page'],'draft')
         action.assert_not_awaited()
-        result,action=await self.run_case(page='login')
+        result,action=await self.run_case(page='draft',reset_draft=False,maintenance=True)
+        self.assertEqual(result['fixture']['page'],'draft')
+        action.assert_not_awaited()
+        result,action=await self.run_case(page='login',reset_draft=False)
         self.assertEqual(result['fixture']['page'],'login')
         action.assert_not_awaited()
 
@@ -60,6 +68,15 @@ class AutomaticRecoverySafety(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(action.await_args.kwargs['reset_draft'])
         for args in [dict(busy=True),dict(repairable=False),dict(review='original-task')]:
             _,action=await self.run_case(page='draft',reset_draft=True,**args)
+            action.assert_not_awaited()
+
+    async def test_automatic_reset_rechecks_idle_drafts_only(self):
+        result,action=await self.run_case(page='draft',reset_draft=False)
+        self.assertEqual(result['fixture']['page'],'ok')
+        self.assertEqual(action.await_args.args[1],'draft')
+        self.assertTrue(action.await_args.kwargs['auto_reset_draft'])
+        for args in [dict(busy=True),dict(repairable=False),dict(review='original-task')]:
+            _,action=await self.run_case(page='draft',reset_draft=False,**args)
             action.assert_not_awaited()
 
     async def test_duplicate_cleanup_retains_binding_and_requires_empty_project_or_home_pages(self):

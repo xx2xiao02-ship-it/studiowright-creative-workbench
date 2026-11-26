@@ -224,6 +224,19 @@ class FlowOverlayReload(unittest.IsolatedAsyncioTestCase):
             self.assertEqual([c.args[2] for c in command.await_args_list if c.args[1] == 'Page.reload'],
                              [{'loaderId': 'old'}])
 
+    async def test_automatic_draft_reset_skips_someone_using_the_editor(self):
+        editing = dict(origin=True, account=True, draft=True, editing=True, editor=True, path=STATE['path'])
+        frame = {'frameTree': {'frame': {'url':PROJECT, 'loaderId':'current'}}}
+        actions = []
+        with patch.object(recovery, 'guard_live'), \
+                patch.object(recovery, 'command', AsyncMock(return_value=frame)) as command, \
+                patch.object(recovery, 'evaluate', AsyncMock(return_value=editing)):
+            result = await recovery.reload_fixed_project(None, {}, '', PROJECT, actions, 'draft',
+                                                         preserve_editing=True)
+        self.assertEqual(result, editing)
+        self.assertEqual(actions, [])
+        command.assert_awaited_once_with(None, 'Page.getFrameTree')
+
     async def test_busy_project_can_reload_only_after_the_editor_is_idle(self):
         ready = dict(origin=True, account=True, editor=True, path=STATE['path'])
         busy = dict(ready, busy=True)

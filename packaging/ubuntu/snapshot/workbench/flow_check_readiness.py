@@ -35,6 +35,7 @@ def composer_expression(email):
         ![...document.querySelectorAll('input')].some(e=>visible(e) &&
           (['checkbox','radio'].includes(e.type) ? e.checked!==e.defaultChecked : e.value.trim()));
       return {origin:true,path:location.pathname,account,login,loadFailed,emptyHome,
+        editing:document.hasFocus() && !!document.activeElement?.closest('flow-prompt-box,flow-base-prompt-box'),
         busy:[...document.querySelectorAll('[role=progressbar],[aria-busy=true]')].some(visible),
         overlay:[...document.querySelectorAll('[role=dialog],[aria-modal=true],flow-change-log-modal')].some(visible),
         draft:[...document.querySelectorAll('flow-prompt-box [contenteditable=true],flow-base-prompt-box [contenteditable=true]')]

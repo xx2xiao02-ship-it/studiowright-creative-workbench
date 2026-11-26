@@ -301,6 +301,10 @@ function flowAccountReason(account, snapshot, row, pageState) {
   if (page === 'busy') return row?.busyRechecked
     ? {label:'暂不可用原因',text:'复查后仍无法确认原窗口空闲，请核对 Flow 页面。'}
     : {label:'正在复查',text:'正在更新任务和窗口状态，确认空闲后会自动刷新原页面。',showOnCard:true};
+  if (page === 'draft' && !row?.review && !account.flow_risk_paused && !account.flow_cooling)
+    return {label:'Flow 草稿或附件待清理',
+      text:row?.draftResetAttempted ? '刷新后仍有草稿或附件，请核对原任务页。'
+        : '原任务页空闲时会自动刷新。也可点「Flow 一键就绪」立即复查。'};
   if (!row?.review && !account.flow_risk_paused && !account.flow_cooling) {
     const needsProject = ['binding','unique','project'].includes(page)
       || (!page && row?.issues?.some(issue => issue.key === 'flow_binding'));
@@ -465,7 +469,7 @@ function accountIssues(account, snapshot = state.snapshot, geminiRow = null,
   else if (pageState === 'unique')
     add('flow_page_state', '固定任务窗口待复查', '算力中心会保留已绑定的任务页，只关闭同项目确认空的副本。', '');
   else if (pageState === 'draft')
-    add('flow_page_state', '固定任务窗口有草稿或附件', '算力中心会保留草稿。处理后再检查就绪。', '');
+    add('flow_draft', '固定任务窗口有草稿或附件', '后台会在原任务页空闲时刷新并复查。', '使用一键就绪立即复查。');
   else if (pageState && !['ok','busy'].includes(pageState))
     add('flow_page_state', '页面未就绪：' + ({overlay:'页面有弹窗待关闭', binding:'窗口绑定待核对', project:'页面停在非标准项目', unconfirmed:'页面状态待确认', busy:'页面忙', draft:'有草稿待核对', load_failed:'固定任务页加载失败'}[pageState] || pageState), '点一键就绪，算力中心会把页面带回标准项目并复查。', '使用一键就绪。');
   const windowIssue = flowWindowIssue(account.profile, snapshot);
@@ -1315,8 +1319,9 @@ function flowGovernance(snapshot, fresh = state.snapshotFresh, verifiedEmpty = n
     const window=windows.get(account.profile);
     if (!window || !['idle','preparing','submitting','submitted','generated','downloading','blocked_draft','result_unknown','needs_verification'].includes(window.state))
       add('flow_binding','任务窗口运行状态待核对','打开 Flow 页的「账号检查记录」核对固定窗口。');
-    if (window?.state==='blocked_draft' && !(verifiedEmpty.has(account.profile) && window.updated <= probeStartedAt))
-      add('flow_draft','固定任务窗口有草稿或附件','算力中心会保留草稿。处理后再检查就绪。');
+    if (window?.state==='blocked_draft' && !issues.some(i=>i.key==='flow_draft') &&
+        !(verifiedEmpty.has(account.profile) && window.updated <= probeStartedAt))
+      add('flow_draft','固定任务窗口有草稿或附件','点「Flow 一键就绪」立即复查。');
     if (!issues.some(issue=>issue.key.startsWith('flow_window_') || issue.key==='flow_draft')) {
       const life=lifecycle.get(account.profile);
       if (c?.window_lifecycle_available!==true || life?.unique_ok!==1)
@@ -1365,8 +1370,9 @@ function autoRecoverFlowPages(pageChecks) {
     const account = state.snapshot?.real_accounts?.items?.find(a => a.profile === profile);
     return Date.now() >= (autoFlowRecoveryAfter.get(profile) || 0) &&
       (['binding','project','flow_landing','editor','overlay','unconfirmed','unique','load_failed'].includes(value)
-        || (value==='busy' && !pageChecks.active_tasks?.[profile])) && !pageChecks?.review?.[profile] &&
-      account?.flow_login === 'verified' && account?.flow_risk_paused !== true && account?.flow_cooling !== true;
+        || (['busy','draft'].includes(value) && !pageChecks.active_tasks?.[profile])) && !pageChecks?.review?.[profile] &&
+      account?.flow_login === 'verified' && account?.flow_risk_paused !== true &&
+      account?.flow_operator_paused !== true && account?.flow_cooling !== true;
   });
   if (!candidates.length) return;
   autoFlowRecoveryProfiles = new Set(candidates.map(([profile]) => profile));
@@ -1642,7 +1648,8 @@ function auditFlowAccounts(snapshot, dispatch, pageChecks, probeStartedAt) {
     if (status==='ready' && (dispatch.paused || busy || flowOccupiedSlots(dispatch)>=dispatch.maximum)) note+=' 新任务可接收，等调度放行或空出名额。';
     if (history.length) note+=` 本轮处理：${history.join('、')}。${status==='ready' ? '复查通过。' : '复查未通过。'}`;
     if (repair?.note) note+=` ${repair.note}`;
-    return {account,status,page,evidence,review,issues:blocked,note,activeTask,busyRechecked};
+    const draftResetAttempted=page==='draft' && repair?.actions?.includes('reset_draft');
+    return {account,status,page,evidence,review,issues:blocked,note,activeTask,busyRechecked,draftResetAttempted};
   });
 }
 
@@ -2565,7 +2572,7 @@ function renderAccounts() {
   for (const account of accounts) for (const issue of accountIssues(account,state.snapshot,geminiReadinessNow.rows.get(account.key))) {
     if (issue.key.startsWith('flow_') !== flow) continue;
     if (['historical_unconfirmed', 'quota_stale', 'gemini_confirmed_verification'].includes(issue.key)) continue;
-    if (autoFlowRecoveryProfiles.has(account.profile) && ['flow_unknown','flow_page_state'].includes(issue.key)) continue;
+    if (autoFlowRecoveryProfiles.has(account.profile) && ['flow_unknown','flow_page_state','flow_draft'].includes(issue.key)) continue;
     affectedAccounts.add(account.key);
     const previous = issueCounts.get(issue.key);
     issueCounts.set(issue.key, {title: issue.title, count: (previous?.count || 0) + 1});

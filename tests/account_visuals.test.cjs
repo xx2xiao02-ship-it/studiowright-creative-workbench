@@ -711,6 +711,17 @@ test('unlinked busy state is rechecked before reporting a persistent problem', (
   assert.match(active.text, /任务 live/);
 });
 
+test('an idle Flow draft is shown as a refreshable state with the result of a completed refresh', () => {
+  const context = vm.createContext({});
+  load('flowLoginNotice', context);
+  load('flowAccountReason', context);
+  const reasonFor = (row) => vm.runInContext(
+    `flowAccountReason({profile:'a'},{tasks:[]},${JSON.stringify(row)},'draft')`, context);
+  assert.equal(reasonFor({recovering:true}).label, '刷新复查中');
+  assert.match(reasonFor({status:'blocked'}).text, /空闲时会自动刷新/);
+  assert.match(reasonFor({status:'blocked',draftResetAttempted:true}).text, /刷新后仍有/);
+});
+
 test('a running account is queued rather than marked failed, while real blockers remain', () => {
   const account = {profile:'a'};
   const context = vm.createContext({

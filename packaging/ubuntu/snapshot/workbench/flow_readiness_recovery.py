@@ -405,7 +405,7 @@ def restart_managed(binding, allow_responsive=False):
     subprocess.run(systemctl+['restart',unit],check=True,capture_output=True,timeout=12)
 
 
-async def reload_fixed_project(ws, account, expected, project, actions, issue):
+async def reload_fixed_project(ws, account, expected, project, actions, issue, *, preserve_editing=False):
     if issue == 'busy':
         # A progress indicator may belong to a generation started directly in Flow.
         for _ in range(4):
@@ -420,7 +420,7 @@ async def reload_fixed_project(ws, account, expected, project, actions, issue):
             or state.get('path', '').rstrip('/') != project_path):
         return {}
     if (state.get('overlay') or page_verdict(state) != ('ok' if issue == 'busy' else issue)
-            or (issue == 'draft' and not state.get('account'))):
+            or (issue == 'draft' and (not state.get('account') or (preserve_editing and state.get('editing'))))):
         return state
     await asyncio.wait_for(command(ws, 'Page.reload', {'loaderId': frame['loaderId']}), timeout=3)
     actions.append('reset_draft' if issue == 'draft' else 'reload')
@@ -481,7 +481,7 @@ async def reopen_redirected_project(ws, account, expected, project, actions):
     return state
 
 
-async def repair(account, initial, actions, safe_only=False, reset_draft=False):
+async def repair(account, initial, actions, safe_only=False, reset_draft=False, auto_reset_draft=False):
     import websockets
     from flow_window_policy import Lifecycle
     from task_coordinator import Coordinator
@@ -517,13 +517,15 @@ async def repair(account, initial, actions, safe_only=False, reset_draft=False):
             verdict = page_verdict(before)
             if verdict in ('login', 'verification_required', 'flow_landing') or (redirected and verdict != 'ok'):
                 return verdict,None
-            if verdict == 'load_failed' or (verdict == 'draft' and reset_draft) or (
+            auto_draft = auto_reset_draft and initial == 'draft'
+            if verdict == 'load_failed' or (verdict == 'draft' and (reset_draft or auto_draft)) or (
                     initial == 'busy' and verdict in ('busy', 'ok')):
                 if (not same or not old or old.get('binding_state') != 'verified'
                         or old.get('project_url') != project or any(old.get(k)!=v for k,v in current.items())):
                     return 'binding',None
                 issue = 'busy' if initial == 'busy' and verdict in ('busy','ok') else verdict
-                before = await reload_fixed_project(ws, account, expected, project, actions, issue)
+                before = await reload_fixed_project(ws, account, expected, project, actions, issue,
+                                                    preserve_editing=auto_draft)
                 verdict = page_verdict(before)
                 if verdict != 'ok':
                     return verdict,None
@@ -699,6 +701,10 @@ async def recover(payload):
     _, paths = flow_runtime()
     busy = set(payload['busy'])
     reset_draft = payload.get('reset_draft') is True
+    # Background recovery explicitly disables the manual reset. Maintenance
+    # uses the same flag for a balance-only check.
+    auto_reset_draft = (payload.get('safe_only') is True and payload.get('reset_draft') is False
+                        and not payload.get('operator_dispatch_paused'))
     bindings = {b['profile']:b for b in payload['bindings']}
     lifecycle = {w['profile']:w for w in Lifecycle().status()}
     out = {}
@@ -753,9 +759,9 @@ async def recover(payload):
                     verdict = await asyncio.wait_for(reconcile_fixed_window(account,binding,actions),
                         timeout=min(45,max(1,deadline-asyncio.get_running_loop().time())))
                 elif (before in {'binding','project','editor','overlay','load_failed','flow_landing'} or old_draft
-                      or (before == 'draft' and reset_draft)):
+                      or (before == 'draft' and (reset_draft or auto_reset_draft))):
                     verdict,_ = await asyncio.wait_for(repair(account,before,actions,
-                        safe_only=payload.get('safe_only') is True,reset_draft=reset_draft),
+                        safe_only=payload.get('safe_only') is True,reset_draft=reset_draft,auto_reset_draft=auto_reset_draft),
                         timeout=min(45,max(1,deadline-asyncio.get_running_loop().time())))
                 else:
                     verdict = before
