@@ -10,6 +10,22 @@ import json
 
 FOCUS_BUS='local.studiowright.Foreground'
 FOCUS_PATH='/local/studiowright/Foreground'
+MAX_COMPOSER_TABS = 8
+
+TAB_ANCHOR = """editor => {
+    const box = editor.closest('flow-prompt-box, flow-base-prompt-box') || editor.parentElement;
+    if (!box) return 'Tab';
+    const controls = [...box.querySelectorAll('button, a[href], input, select, textarea, [tabindex]')]
+        .filter(el => el !== editor && !editor.contains(el) && el.tabIndex === 0
+            && !el.matches(':disabled') && !el.closest('[inert], [aria-hidden="true"]')
+            && el.getAttribute('aria-disabled') !== 'true'
+            && el.getClientRects().length && getComputedStyle(el).visibility === 'visible');
+    const previous = controls.filter(el => editor.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING).at(-1);
+    const next = controls.find(el => editor.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const anchor = previous || next;
+    if (anchor) anchor.focus({preventScroll: true});
+    return !previous && next && box.ownerDocument.activeElement === next ? 'Shift+Tab' : 'Tab';
+}"""
 
 
 class WaylandDesktopDriver:
@@ -116,41 +132,36 @@ class WaylandDesktopDriver:
         matched=[w for w in windows if w.get('id')==target.window_id and w.get('workspace')==target.workspace
                  and w.get('title') in (title,title+' - Google Chrome',title+' - Chromium')]
         if len(matched)!=1 or matched[0].get('id')!=target.window_id:return False
-        await page.bring_to_front()
-        if not await self._os_focus_confirmed(target): return False
-        from input_backend import open_pointer
-        from pointer_sequence import prepare_pointer
-        pointer=open_pointer(target,gui_environment=self.env)
-        await pointer.ensure_ready()
-        # Portal permission prompts can take focus while they are shown.
-        if not await self.activate_and_confirm(target): return False
-        await page.bring_to_front()
-        if not await self._os_focus_confirmed(target): return False
-        await prepare_pointer(page=page, composer=composer, target=target,
-                              driver=self, pointer=pointer)
-        return await self.confirm_focus(target,page,composer)
+        return await self.composer_ready_cdp(page, composer, target)
 
     async def composer_ready_cdp(self, page, composer, target):
-        """Like composer_ready, but pointer preparation is best-effort: CDP
-        typing does not depend on the real pointer, so a pending portal
-        consent dialog must not block the input path."""
+        """Follow the page's Tab order and stop before typing if focus is uncertain."""
         if not await self._identity_confirmed(target):return False
         await page.bring_to_front()
-        if not await self._os_focus_confirmed(target): return False
-        try:
-            from input_backend import open_pointer
-            from pointer_sequence import prepare_pointer
-            pointer=open_pointer(target,gui_environment=self.env)
-            await pointer.ensure_ready(timeout=10)
-            await prepare_pointer(page=page, composer=composer, target=target,
-                                  driver=self, pointer=pointer)
-        except Exception:
-            pass
-        try:
-            await composer.click()
-        except Exception:
-            pass
-        return await self.confirm_focus(target,page,composer)
+        key = 'Tab'
+        for steps in range(MAX_COMPOSER_TABS + 1):
+            if not await self._identity_confirmed(target) or not await self._os_focus_confirmed(target):
+                return False
+            focus = await composer.evaluate("""el => {
+                const doc = el.ownerDocument;
+                if (doc.visibilityState !== 'visible' || !doc.hasFocus() || !el.isContentEditable
+                    || el.getAttribute('aria-disabled') === 'true' || !el.getClientRects().length
+                    || getComputedStyle(el).visibility !== 'visible') return 'unavailable';
+                const active = el.getRootNode().activeElement;
+                return active === el || el.contains(active) ? 'composer' : 'other';
+            }""")
+            if focus == 'composer':
+                from task_coordinator import record
+                record('composer_tab_focused', steps=steps)
+                return True
+            if focus != 'other' or steps == MAX_COMPOSER_TABS:
+                return False
+            if steps == 0:
+                key = await composer.evaluate(TAB_ANCHOR)
+                if not await self._os_focus_confirmed(target):
+                    return False
+            await page.keyboard.press(key)
+        return False
 
     async def composer_text(self, page, composer):
         return await composer.inner_text()

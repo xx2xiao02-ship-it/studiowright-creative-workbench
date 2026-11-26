@@ -226,7 +226,7 @@ async def paste_and_submit_reserved(*, driver, page, composer, target, prompt,
     await _pacing_wait(record, target.account_key)
     mode = "hybrid" if hybrid else choose_prompt_input(prompt)
     try:
-            # Repair only focus/pointer preparation; paste and send stay single-shot.
+            # Retry focus only; prompt input and submission stay single-shot.
             for attempt in range(3):
                 if not preparation_safe():
                     raise InputNotSubmitted('submission_boundary_already_recorded')

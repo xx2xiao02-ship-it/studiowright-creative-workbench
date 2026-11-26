@@ -150,7 +150,7 @@
   "workbench/flow_warning_archive.py": "dd8553aa1da643c8d83601bc5a254125549b103ea9ac9c4fac0514685f417cd4",
   "workbench/flow_window_binding.py": "0d3d11f9d65703d3a597b51fd15a18083c3822fa71f865810317a4c4a1783bbf",
   "workbench/flow_window_policy.py": "7f5fe95237dac318cdf304184cc95d42648e562cae354e61d901a254adfbfc39",
-  "workbench/foreground_input.py": "93b3df6a978f5e93bcf3ebeec1190112980a592107bc403f6cc0e6810ed4aa95",
+  "workbench/foreground_input.py": "8173876e7f7e804baf86d86e9c6f5cf0ab0db088d95634bef09e3f5acfbf7410",
   "workbench/foreground_lease.py": "b02bbfb08f20ff635104c911dbd53ea187171564c80940c361e26cba03401833",
   "workbench/foreground_queue.py": "46b71cf3ff035fb405c586fad383553a61acaa5e8122e47415ff28eb76180167",
   "workbench/gemini_authorization.py": "0423353eff24a7f3aa27c9892c374d7cc3806541c026f2062bb13c75e3f211bc",
@@ -192,5 +192,5 @@
   "workbench/uinput_hid.py": "dd54ed97580b44243e084336f0895c6ae63776916a142dab31521e813f173e81",
   "workbench/unified_api.py": "a9716be2621ff7b9ce7915056d3c2445423152b24f3c39b789b55c06d87d8504",
   "workbench/unified_keys.py": "f57ec533b62589b0e3202b2eb259c430f8af0da7a97b8153ea677469d5f2ad99",
-  "workbench/wayland_desktop_driver.py": "e605e401446180ec785284115f0f7cf1c9d3cf9b1d080a493c16664a555ca1d8"
+  "workbench/wayland_desktop_driver.py": "6b6dab9f5af2771a478b15cdc809b082d3248e178ef56c639ee0a080e400c80c"
 }
