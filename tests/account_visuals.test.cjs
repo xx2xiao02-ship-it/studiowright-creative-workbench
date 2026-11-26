@@ -606,6 +606,50 @@ test('a manually paused Flow account has its own message, separate from a risk r
   assert.equal(vm.runInContext("flowAccountReason(account,{}, {},'ok')",context),null);
 });
 
+test('pause waits for an older account poll and redraws after unlocking the card', async () => {
+  const feedback = {};
+  const button = {
+    dataset:{flowOperatorPause:'fixture', paused:'true'},
+    closest:()=>({querySelector:()=>feedback}),
+  };
+  const calls = [];
+  let endOldPoll;
+  const state = {view:'accounts', snapshotFresh:true, snapshot:{real_accounts:{
+    items:[{key:'flow-account-fixture', flow_operator_paused:false}],
+  }}};
+  const inFlight = new Set();
+  const context = vm.createContext({
+    state, document:{}, accountActionsInFlight:inFlight,
+    snapshotRefreshInFlight:new Promise(resolve => { endOldPoll = resolve; }),
+    $:()=>({querySelector:()=>feedback}),
+    postJson:async (_path, body) => {
+      assert.equal(body.paused, true);
+      return {ok:true, paused:true, message:'Flow 账号已暂停。'};
+    },
+    refresh:async () => {
+      calls.push('fresh poll');
+      state.snapshot.real_accounts.items[0].flow_operator_paused = true;
+      assert.equal(inFlight.has(button), true);
+    },
+    renderAccounts:() => {
+      assert.equal(inFlight.size, 0);
+      assert.equal(state.snapshot.real_accounts.items[0].flow_operator_paused, true);
+      calls.push('render');
+    },
+  });
+  load('setFlowAccountPauseFromPanel', context);
+  const pending = context.setFlowAccountPauseFromPanel(button);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(feedback.textContent, /正在同步卡片/);
+  assert.deepEqual(calls, []);
+  assert.equal(button.disabled, true);
+  endOldPoll();
+  await pending;
+  assert.deepEqual(calls, ['fresh poll', 'render']);
+  assert.equal(feedback.textContent, 'Flow 账号已暂停。');
+  assert.equal(button.disabled, false);
+});
+
 test('the account card shows only the matching failure screenshot', () => {
   const context = vm.createContext({});
   load('flowLoginNotice', context);

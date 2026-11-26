@@ -61,6 +61,7 @@ button:disabled { cursor: wait; opacity: .6; }
 .account-card { position: relative; min-width: 0; padding: 16px; border: 1px solid #dce6df; border-radius: 12px; background: #fff; }
 .account-card.is-account-issue,
 .account-card.is-flow-paused { border-color: #e3c8a8; box-shadow: inset 3px 0 #bd8752; }
+.account-card.is-flow-operator-paused { border-color: #d7b449; box-shadow: inset 3px 0 #ba850e; }
 .account-card:hover, .account-card:focus-within { z-index: 2; }
 .account-card-heading { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .account-avatar { display: grid; place-items: center; flex: none; width: 42px; height: 42px; border-radius: 12px; background: #e5f2e9; color: #226c55; font-weight: 700; font-size: 17px; }
@@ -164,6 +165,7 @@ progress.account-quota-track { appearance: none; }
 .account-alert-body p { margin: 0; }
 .account-alert-body p + p { margin-top: 7px; }
 .account-check-status { margin: 9px 0 0; color: #51675c; font-size: 12px; }
+.account-pause-feedback:empty { margin: 0; }
 .account-card-footer { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px 14px; border-top: 1px solid #e7eee9; margin-top: 11px; padding-top: 5px; }
 .account-card-footer details[open] { flex-basis: 100%; }
 .account-card-footer summary { width: fit-content; padding: 4px 0; color: #465d51; cursor: pointer; }
@@ -733,6 +735,8 @@ td strong { color: #283b31; font-size: 13px; } td code { color: #7c8d82; font-si
 .official-result > span { font-size: 13px; color: #425d50; }
 .account-service.is-service-issue { border-color: #d6a69e; background: #fff4f1; box-shadow: none; }
 .account-service.is-service-issue .account-service-heading strong { color: #923e33; background: #f8e0db; }
+.account-service.is-service-operator-paused { border-color: #d7b449; background: #fff9e5; }
+.account-service.is-service-operator-paused .account-service-heading strong { background: #f8e8aa; color: #614608; }
 @media (max-width: 600px) {
   .account-page-heading { flex-direction: column; align-items: flex-start; gap: 16px; }
   .account-page-heading .account-heading-actions { flex-wrap: wrap; }
