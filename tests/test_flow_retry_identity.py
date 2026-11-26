@@ -16,6 +16,8 @@ from test_flow_regressions import fixture_directory
 SNAPSHOT = Path(__file__).resolve().parents[1] / 'packaging/ubuntu/snapshot'
 sys.path[:0] = [str(SNAPSHOT / name) for name in ('flow/console', 'workbench', 'flow/source/src')]
 from unified_api import allowed_route
+from studiowright.pacing import CoolingDown, Governor, PaceSettings, RiskPaused
+from studiowright.store import Store as FlowStore
 
 spec = spec_from_file_location('flow_retry_identity_console', SNAPSHOT / 'flow/console/server.py')
 console = module_from_spec(spec)
@@ -42,6 +44,7 @@ class RetryIdentity(unittest.TestCase):
         with patch.object(console, 'Vault'):
             app = console.create_app(root, FixtureAdapter(), test=True)
         self.store = app.state.console.store
+        self.console = app.state.console
         self.store.update_account('fixture', 'fixture@example.test', 'verified')
         self.store.project('fixture', self.project, 'FLOW+fixture')
         self.client = TestClient(app)
@@ -87,6 +90,53 @@ class RetryIdentity(unittest.TestCase):
         blocked = self.submit('after-remove')
         self.assertEqual(blocked.status_code, 400)
         self.assertIn('已从 Flow 号池移除', blocked.json()['error'])
+
+    def test_operator_pause_stops_dispatch_without_clearing_risk_or_cooldown(self):
+        from account_pacing import account_status
+        from filelock import FileLock
+        from time import time
+
+        database = self.console.root / 'data/studiowright.db'
+        store = FlowStore(database)
+        headers = {'Origin':'http://testserver', 'X-Console-Request':'1'}
+        route = '/api/accounts/operator-pause'
+        body = {'profile':'fixture', 'paused':True}
+        self.assertEqual(self.client.post(route, headers=self.headers(), json=body).status_code, 403)
+        with patch.object(self.store, 'authenticated', return_value=True):
+            lock_path = database.parent / 'locks' / 'fixture.lock'
+            lock_path.parent.mkdir()
+            with FileLock(str(lock_path)):
+                self.assertEqual(self.client.post(route, headers=headers, json=body).status_code, 409)
+            for _ in range(2):
+                response = self.client.post(route, headers=headers, json=body)
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertTrue(response.json()['paused'])
+            status = account_status(self.store.accounts(), database)[0]
+            self.assertTrue(status['risk_paused'])
+            self.assertTrue(status['operator_paused'])
+            self.assertFalse(status['risk_review_required'])
+            governor = Governor(FlowStore(database), 'fixture', PaceSettings())
+            with self.assertRaises(RiskPaused):
+                governor.reserve()
+            now = time()
+            with store.transaction() as db:
+                db.execute("INSERT INTO flow_risk(profile,paused,consecutive) VALUES('fixture',1,3)")
+                db.execute("INSERT INTO pacing(profile,cooldown_until) VALUES('fixture',?)", (now + 600,))
+            resumed = self.client.post(route, headers=headers, json={**body,'paused':False})
+            self.assertEqual(resumed.status_code, 200)
+            status = account_status(self.store.accounts(), database, now)[0]
+            self.assertFalse(status['operator_paused'])
+            self.assertTrue(status['risk_review_required'])
+            self.assertEqual(status['risk_consecutive'], 3)
+            with self.assertRaises(RiskPaused):
+                governor.reserve(now)
+            self.assertTrue(self.client.post('/api/accounts/risk-resume', headers=headers,
+                                              json={'profile':'fixture'}).json()['ok'])
+            with self.assertRaises(CoolingDown):
+                governor.reserve(now)
+        with store.connect() as db:
+            actions = [row['action'] for row in db.execute('SELECT action FROM flow_risk_events ORDER BY id')]
+        self.assertEqual(actions, ['operator_pause','operator_resume','manual_resume'])
 
     def fail_original(self, *, evidence='confirmed_before_submit'):
         response = self.submit('fixture-original')

@@ -19,7 +19,7 @@ from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 
-from account_pacing import account_status, resume_after_review
+from account_pacing import account_status, resume_after_review, set_operator_pause
 from adapter import AccountWindowBusy, PreSubmissionTransient, PreSubmissionFailure
 from api_keys import APIKeys
 from account_insights import Insights
@@ -982,6 +982,47 @@ def create_app(root, adapter, test=False):
         except (ValueError, TypeError) as exc:
             return JSONResponse({'error': safe_error(exc)}, status_code=400)
 
+    async def set_flow_operator_pause(request):
+        from filelock import FileLock, Timeout
+
+        if request.state.api_key:
+            return JSONResponse({'error': '请从工作台管理 Flow 账号。'}, status_code=403)
+        try:
+            data = await payload(request)
+            profile, paused = data.get('profile'), data.get('paused')
+            if (set(data) != {'profile', 'paused'} or type(paused) is not bool
+                    or not isinstance(profile, str) or not PROFILE.fullmatch(profile)
+                    or not any(a['profile'] == profile and a.get('email') and not a.get('flow_removed')
+                               for a in c.store.accounts())):
+                raise ValueError('请选择已登记的 Flow 账号。')
+            database = c.root / 'data/studiowright.db'
+            current = account_status([{'profile': profile}], database)[0]
+            if paused and current['operator_paused'] is not True:
+                if profile in c.busy or profile in c.balance_busy:
+                    raise Timeout(profile)
+                locks = c.root / 'data/locks'
+                locks.mkdir(parents=True, mode=0o700, exist_ok=True)
+                with FileLock(str(locks / (profile + '.lock'))).acquire(timeout=0):
+                    set_operator_pause(database, profile, True)
+            elif not paused:
+                set_operator_pause(database, profile, False)
+            restriction = account_status([{'profile': profile}], database)[0]
+            if restriction['operator_paused'] is not paused:
+                raise ValueError('Flow 暂停状态未确认，请刷新后核对。')
+            message = 'Flow 账号已暂停。'
+            if not paused:
+                risk = restriction['risk_review_required'] is True or profile in c.store.page_incidents()
+                message = ('已解除手动暂停，账号仍需人工核查。' if risk
+                           else '已解除手动暂停，任务会等待冷却结束。' if restriction['generation_state'] == 'cooling_down'
+                           else '已解除 Flow 手动暂停。')
+            return JSONResponse({'ok': True, 'paused': paused, 'message': message})
+        except Timeout:
+            return JSONResponse({'error': '该账号正在执行、检查或远程登录，请在窗口空闲后暂停。'}, status_code=409)
+        except (ValueError, TypeError) as exc:
+            return JSONResponse({'error': safe_error(exc)}, status_code=400)
+        except (OSError, sqlite3.Error):
+            return JSONResponse({'error': 'Flow 暂停状态未确认，请刷新后核对。'}, status_code=503)
+
     async def resume_flow_risk(request):
         try:
             data = await payload(request)
@@ -991,7 +1032,8 @@ def create_app(root, adapter, test=False):
             resume_after_review(c.root / 'data/studiowright.db', profile)
             status = account_status([{'profile': profile}], c.root / 'data/studiowright.db')[0]
             return JSONResponse({'ok': True, 'cooling': status['generation_state'] == 'cooling_down',
-                'message': 'Flow 已恢复；如仍在冷却，任务会继续等待冷却结束。'})
+                'message': ('已记录风控核查，账号仍处于手动暂停。' if status['operator_paused']
+                            else 'Flow 已恢复；如仍在冷却，任务会继续等待冷却结束。')})
         except (ValueError, TypeError) as exc:
             return JSONResponse({'error': safe_error(exc)}, status_code=400)
 
@@ -1608,6 +1650,7 @@ def create_app(root, adapter, test=False):
         Route("/api/logout", logout, methods=["POST"]),
         Route("/api/state", state),
         Route("/api/accounts/credits/refresh", refresh_balances, methods=["POST"]),
+        Route("/api/accounts/operator-pause", set_flow_operator_pause, methods=["POST"]),
         Route("/api/accounts/risk-resume", resume_flow_risk, methods=["POST"]),
         Route("/api/accounts/page-incident-review", review_flow_page_incident, methods=["POST"]),
         Route("/api/keys", api_keys, methods=["GET", "POST"]),

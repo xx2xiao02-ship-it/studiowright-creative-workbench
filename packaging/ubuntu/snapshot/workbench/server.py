@@ -474,6 +474,8 @@ def account_rows(state):
                      "flow_pacing_known": row.get('generation_state') in ('cooling_down', 'not_cooling_down'),
                      "flow_risk_known": type(row.get('risk_paused')) is bool,
                      "flow_risk_paused": row.get('risk_paused') is True,
+                     "flow_operator_paused": row.get('operator_paused') is True,
+                     "flow_risk_review_required": row.get('risk_review_required', row.get('risk_paused')) is True,
                      "flow_risk_consecutive": row.get('risk_consecutive') if type(row.get('risk_consecutive')) is int and row.get('risk_consecutive') >= 0 else None,
                      "gemini": "unlinked"})
     return rows
@@ -808,23 +810,40 @@ class Sources:
             pass
         return 503, {'error':'Flow 账号移除状态未确认，请刷新后核对。'}
 
-    def flow_risk_resume(self, profile, incident=None):
+    def flow_account_control(self, profile, action, **fields):
         if not isinstance(profile, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}', profile):
             raise ValueError('账号标识不正确。')
-        action = 'page-incident-review' if incident is not None else 'risk-resume'
         url = f"http://127.0.0.1:{self.ports['flow']}/api/accounts/{action}"
-        data = {'profile': profile}
-        if incident is not None:
-            data['incident'] = incident
-        body = json.dumps(data).encode('utf-8')
+        body = json.dumps({'profile': profile, **fields}).encode('utf-8')
         request = Request(url, data=body, method='POST', headers={'Content-Type':'application/json',
                           'Origin': f"http://127.0.0.1:{self.ports['flow']}", 'X-Console-Request':'1'})
+        with self.opener.open(request, timeout=self.timeout) as response:
+            result = json.loads(response.read(8193))
+        if not isinstance(result, dict) or result.get('ok') is not True:
+            raise ValueError('Flow 操作结果未确认，请刷新后核对。')
+        return result
+
+    def flow_operator_pause(self, profile, paused):
         try:
-            with self.opener.open(request, timeout=self.timeout) as response:
-                result = json.loads(response.read(8193))
-            if not isinstance(result, dict) or result.get('ok') is not True:
-                raise ValueError('Flow 恢复状态未确认，请刷新后核对。')
-            return result
+            result = self.flow_account_control(profile, 'operator-pause', paused=paused)
+            if result.get('paused') is not paused:
+                raise ValueError('Flow 暂停状态未确认，请刷新后核对。')
+            return 200, result
+        except HTTPError as exc:
+            try:
+                error = clean_text(json.loads(exc.read(8193)).get('error'), 180)
+            except (AttributeError, ValueError, OSError):
+                error = ''
+            return exc.code if exc.code in (400, 409) else 503, {
+                'error': error or 'Flow 暂停操作未完成，请刷新后核对。'}
+        except (OSError, ValueError):
+            return 503, {'error': 'Flow 暂停状态未确认，请刷新后核对。'}
+
+    def flow_risk_resume(self, profile, incident=None):
+        try:
+            if incident is not None:
+                return self.flow_account_control(profile, 'page-incident-review', incident=incident)
+            return self.flow_account_control(profile, 'risk-resume')
         except HTTPError as exc:
             if exc.code == 409:
                 raise ValueError('这条警告已核查或已变化，请刷新。') from None
@@ -2437,7 +2456,7 @@ def make_handler(sources, deployment="local", coordinator=None, real_pool=None, 
                     return self.json_response(400, {"error": str(exc)})
                 except Exception:
                     return self.json_response(500, {"error": "暂时无法找回，请核对原任务。"})
-            if self.path in {"/api/real-pool/chat", "/api/real-pool/image-analysis", "/api/real-pool/image-analysis-validate", "/api/real-pool/flow", "/api/real-pool/flow-validate", "/api/real-pool/enabled", "/api/real-pool/keepalive-enabled", "/api/real-pool/dispatch-policy", "/api/real-pool/flow-risk-resume", "/api/real-pool/flow-retry-project"}:
+            if self.path in {"/api/real-pool/chat", "/api/real-pool/image-analysis", "/api/real-pool/image-analysis-validate", "/api/real-pool/flow", "/api/real-pool/flow-validate", "/api/real-pool/enabled", "/api/real-pool/keepalive-enabled", "/api/real-pool/dispatch-policy", "/api/real-pool/flow-operator-pause", "/api/real-pool/flow-risk-resume", "/api/real-pool/flow-retry-project"}:
                 if not real_pool:
                     return self.json_response(503, {"error": "真实账号接入暂不可用。"})
                 if getattr(real_pool, 'maintenance', lambda: False)():
@@ -2508,6 +2527,16 @@ def make_handler(sources, deployment="local", coordinator=None, real_pool=None, 
                         if len(projects) != 1:
                             raise ValueError('请选择此账号已登记的项目。')
                         return self.json_response(200, sources.flow_retry_project(profile, projects[0]['source_id']))
+                    if self.path.endswith('/flow-operator-pause'):
+                        if (set(data) != {'account', 'paused'} or type(data['paused']) is not bool
+                                or not isinstance(data['account'], str) or not re.fullmatch(r'[0-9a-f]{64}', data['account'])):
+                            raise ValueError('请选择需要暂停或恢复的 Flow 账号。')
+                        matches = [a for a in account_data['items']
+                                   if a.get('key') == 'flow-account-' + data['account'] and not a.get('flow_removed')]
+                        if len(matches) != 1:
+                            raise ValueError('账号无法唯一匹配，请刷新。')
+                        status, result = sources.flow_operator_pause(matches[0]['profile'], data['paused'])
+                        return self.json_response(status, result)
                     if self.path.endswith('/flow-risk-resume'):
                         if set(data) not in ({'account'}, {'account', 'incident'}) or not isinstance(data['account'], str) or not re.fullmatch(r'[0-9a-f]{64}', data['account']):
                             raise ValueError('请选择已登记账号。')
@@ -2519,7 +2548,7 @@ def make_handler(sources, deployment="local", coordinator=None, real_pool=None, 
                             if not current or data['incident'] != current['id']:
                                 raise ValueError('这条警告已核查或已变化，请刷新。')
                             return self.json_response(200, sources.flow_risk_resume(matches[0]['profile'], current['id']))
-                        if matches[0].get('flow_risk_paused') is not True:
+                        if matches[0].get('flow_risk_review_required', matches[0].get('flow_risk_paused')) is not True:
                             raise ValueError('该账号当前没有需要人工恢复的暂停。')
                         return self.json_response(200, sources.flow_risk_resume(matches[0]['profile']))
                     if self.path.endswith('/dispatch-policy'):

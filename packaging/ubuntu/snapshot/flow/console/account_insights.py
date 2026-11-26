@@ -67,6 +67,7 @@ class Insights:
             value=number(b.get('balance'));observed=number(b.get('observed'))
             fresh=value is not None and observed is not None and 0<=now-observed<=FRESH_SECONDS and b.get('status') in ('ready','retrying')
             if a.get('flow_page_incident'):health,reason='paused','页面显示异常活动，等待人工核查'
+            elif a.get('operator_paused') is True:health,reason='paused','已手动暂停 Flow 派发'
             elif a.get('risk_paused') is True:health,reason='paused','多次异常，等待人工核查后恢复'
             elif a.get('state')!='verified':health,reason='attention','登录尚未核对或需要检查'
             elif a.get('generation_state')=='cooling_down':health,reason='cooling','异常活动冷却中'

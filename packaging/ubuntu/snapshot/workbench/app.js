@@ -246,6 +246,8 @@ function flowAccountReason(account, snapshot, row, pageState) {
     return {label:'Flow 停派原因', text:`${phase}时检测到异常活动提示，等待人工核查。`,
       screenshotMissing:!account.flow_page_incident.has_screenshot};
   }
+  if (account.flow_operator_paused && !account.flow_risk_review_required)
+    return {label:'手动暂停',text:'Flow 任务暂不派发。可在「账号操作」里恢复账号。',showOnCard:true,noScreenshot:true};
   const page = pageState || row?.page;
   const signIn = flowLoginNotice(page);
   if (signIn) return {...signIn, showOnCard:true, noScreenshot:true};
@@ -446,7 +448,10 @@ function accountIssues(account, snapshot = state.snapshot, geminiRow = null,
   const issues = [];
   const signIn = flowLoginNotice(pageState);
   const add = (key, title, impact, action) => issues.push({key, title, impact, action});
-  if (account.flow_risk_paused === true || account.flow_health === 'paused')
+  if (account.flow_operator_paused)
+    add('flow_operator_paused', 'Flow 已手动暂停', '新任务和自动切号重试会跳过该账号。', '在「账号操作」里恢复账号。');
+  if (account.flow_page_incident || (account.flow_risk_review_required ?? (!account.flow_operator_paused &&
+      (account.flow_risk_paused === true || account.flow_health === 'paused'))))
     add('flow_paused', 'Flow 已暂停，需核查', '该账号的 Flow 暂不能用于生成；Gemini 状态单独判断。', '核对原账号状态后，再决定是否恢复 Flow。');
   else if (account.flow_cooling === true || account.flow_health === 'cooling')
     add('flow_cooling', 'Flow 冷却中', '该账号的 Flow 暂时等待；Gemini 状态单独判断。', '等待冷却结束后核对状态。');
@@ -2605,6 +2610,7 @@ function renderAccounts() {
     const cooling = item.flow_cooling === true || item.flow_health === 'cooling';
     const pageIncident = item.flow_page_incident;
     const flowPaused = item.flow_risk_paused === true || !!pageIncident;
+    const flowRiskReview = (item.flow_risk_review_required ?? item.flow_risk_paused) === true || !!pageIncident;
     const flowReady = flowRow?.status === 'ready' || flowRow?.status === 'queue';
     const callState = officialAccount(item);
     const geminiReady = geminiAccountAvailability(item).manual;
@@ -2630,7 +2636,7 @@ function renderAccounts() {
     const geminiLastCheck = item.gemini_enabled === false ? '已暂停' : item.gemini === 'verified' ? '上次已核对' : '待核对';
     const geminiStatusText = item.gemini_removed ? '已从号池删除' : geminiCard.label;
     const cardState = (flow && flowPaused ? ' is-flow-paused' : flow && cooling ? ' is-flow-cooling' : '') + (needsAttention ? ' is-account-issue' : '');
-    const flowStatusText = pageIncident ? '已停派' : ['flow_landing','login','verification_required'].includes(flowRow?.page) ? '暂不派发'
+    const flowStatusText = pageIncident ? '已停派' : item.flow_operator_paused ? '手动暂停' : ['flow_landing','login','verification_required'].includes(flowRow?.page) ? '暂不派发'
       : item.flow_preflight_reasons?.length && !flowPaused && !cooling ? '自检未通过' : readinessBadge(flowRow);
     const cooldownSeconds = typeof item.flow_cooldown_seconds === 'number' && Number.isFinite(item.flow_cooldown_seconds) && item.flow_cooldown_seconds > 0 ? item.flow_cooldown_seconds : null;
     const cooldownEnd = cooldownSeconds === null ? null : (state.snapshotReceivedAt || Date.now()) + cooldownSeconds * 1000;
@@ -2660,6 +2666,8 @@ function renderAccounts() {
       ? `<a class="button button-light" href="http://127.0.0.1:18888/remote#profile=${encodeURIComponent(item.profile)}" target="_blank" rel="noopener noreferrer" aria-label="远程登录 ${esc(identity)}">远程登录</a>` : '';
     const removeFlow = flow && item.email
       ? `<button class="button button-light" type="button" data-remove-flow="${accountKey}" aria-label="从 Flow 号池移除 ${esc(identity)}"${activeFlowTask ? ' disabled title="该账号仍有进行中的生成任务"' : ''}>移除 Flow 账号</button>` : '';
+    const pauseFlow = flow && item.email
+      ? `<button class="button button-light" type="button" data-flow-operator-pause="${accountKey}" data-paused="${!item.flow_operator_paused}">${item.flow_operator_paused ? '恢复账号' : '暂停账号'}</button>` : '';
     const flowNotice = flow ? flowAccountNoticeMarkup(flowReason, pageIncident || state.snapshot?.flow_warning_screenshots?.[item.profile]) : '';
     const diagnostics = (flow ? [
       flowReason?.showOnCard ? '' : flowNotice,
@@ -2677,8 +2685,8 @@ function renderAccounts() {
       ${flow && flowReason?.showOnCard ? flowNotice : ''}
       ${!flow && geminiRow?.checking ? `<p class="account-check-status">Gemini · ${esc(geminiRow.note || '正在检查云端响应')}</p>` : ''}
       ${diagnostics ? `<details class="account-alert" data-account-fold="alert-${accountKey}"><summary><strong>${needsAttention || flow && flowPaused ? '异常详情' : '状态说明'}</strong><span>${flow ? 'Flow' : 'Gemini'}</span></summary><div class="account-alert-body">${diagnostics}</div></details>` : ''}
-      ${flow ? `<div class="account-card-footer"><details class="account-retry" data-account-fold="retry-${accountKey}"><summary>切号备用项目</summary><p class="subtle">切号重试将在此账号选定的项目生成，可能消耗积分。未指定时不会用此账号切号。</p><select aria-label="切号备用项目" data-retry-project="${accountKey}"><option value="">不指定</option>${accountProjects.map(p => `<option value="${esc(p.key)}" ${p.key === selectedRetryProject ? 'selected' : ''}>${esc(p.title)} · ${esc(shortId(p.source_id))}</option>`).join('')}</select><button class="text-link" type="button" data-save-retry-project="${accountKey}">保存备用项目</button></details>${removeFlow ? `<details class="account-preferences" data-account-fold="flow-actions-${accountKey}"><summary>账号操作</summary><div class="account-card-actions">${removeFlow}</div></details>` : ''}</div>` : removeGemini ? `<div class="account-card-footer"><details class="account-preferences" data-account-fold="actions-${accountKey}"><summary>账号操作</summary><div class="account-card-actions">${removeGemini}</div></details></div>` : ''}
-      <div class="account-card-actions">${flow ? remoteFlow+govRelease : authControl+geminiVerify}${flow && flowPaused ? `<button class="button button-light" type="button" data-resume-flow="${accountKey}"${pageIncident ? ` data-incident="${esc(pageIncident.id)}"` : ''}>已核查，恢复 Flow</button>` : ''}</div></article>`;
+      ${flow ? `<div class="account-card-footer"><details class="account-retry" data-account-fold="retry-${accountKey}"><summary>切号备用项目</summary><p class="subtle">切号重试将在此账号选定的项目生成，可能消耗积分。未指定时不会用此账号切号。</p><select aria-label="切号备用项目" data-retry-project="${accountKey}"><option value="">不指定</option>${accountProjects.map(p => `<option value="${esc(p.key)}" ${p.key === selectedRetryProject ? 'selected' : ''}>${esc(p.title)} · ${esc(shortId(p.source_id))}</option>`).join('')}</select><button class="text-link" type="button" data-save-retry-project="${accountKey}">保存备用项目</button></details>${removeFlow ? `<details class="account-preferences" data-account-fold="flow-actions-${accountKey}"><summary>账号操作</summary><div class="account-card-actions">${pauseFlow}${removeFlow}</div></details>` : ''}</div>` : removeGemini ? `<div class="account-card-footer"><details class="account-preferences" data-account-fold="actions-${accountKey}"><summary>账号操作</summary><div class="account-card-actions">${removeGemini}</div></details></div>` : ''}
+      <div class="account-card-actions">${flow ? remoteFlow+govRelease : authControl+geminiVerify}${flow && flowRiskReview ? `<button class="button button-light" type="button" data-resume-flow="${accountKey}"${pageIncident ? ` data-incident="${esc(pageIncident.id)}"` : ''}>已核查，恢复 Flow</button>` : ''}</div></article>`;
     return {key: accountKey, markup, cooldownEnd};
   });
   if (flow) syncFlowAccountCards(table, issueSummary, cards);
@@ -3105,6 +3113,22 @@ $("realAccountTable").addEventListener("click", async (event) => {
       openGovernance('gemini');
     } catch (error) { $("accountActionMessage").textContent = error.message || '检查未完成。'; }
     finally { geminiVerifyButton.disabled = false; }
+    return;
+  }
+  const pauseFlowButton = event.target.closest('[data-flow-operator-pause]');
+  if (pauseFlowButton) {
+    const paused = pauseFlowButton.dataset.paused === 'true';
+    pauseFlowButton.disabled = true;
+    accountActionsInFlight.add(pauseFlowButton);
+    const message = $('accountActionMessage');
+    message.textContent = paused ? '正在暂停 Flow 账号…' : '正在恢复 Flow 账号…';
+    try {
+      const result = await postJson('/api/real-pool/flow-operator-pause',
+        {account:pauseFlowButton.dataset.flowOperatorPause, paused});
+      message.textContent = result.message;
+      await refresh();
+    } catch (error) { message.textContent = error.message || 'Flow 账号状态未确认。'; }
+    finally { accountActionsInFlight.delete(pauseFlowButton); pauseFlowButton.disabled = false; }
     return;
   }
   const removeFlowButton = event.target.closest('[data-remove-flow]');

@@ -127,8 +127,10 @@ class Governor:
 
     def _assert_allowed(self, db, now: float) -> None:
         if ':' not in self.profile:
-            risk = db.execute("SELECT paused FROM flow_risk WHERE profile=?", (self.profile,)).fetchone()
-            if risk and risk['paused']:
+            paused = db.execute("""SELECT 1 FROM flow_risk WHERE profile=? AND paused<>0
+                UNION ALL SELECT 1 FROM flow_operator_pauses WHERE profile=? LIMIT 1""",
+                (self.profile, self.profile)).fetchone()
+            if paused:
                 raise RiskPaused()
         row = db.execute("SELECT cooldown_until FROM pacing WHERE profile=?", (self.profile,)).fetchone()
         if row and row['cooldown_until'] > now:

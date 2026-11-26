@@ -12,6 +12,7 @@ H=Path.home();F=H/'.local/share/studiowright-evaluation';S=H/'.local/state/creat
 shared=str(H/'.local/share/creative-unified-workbench')
 if shared not in sys.path:sys.path.append(shared)
 from flow_window_policy import Lifecycle,INTERVAL,safe_page,ensure_unique
+from account_pacing import account_status
 
 def gate(account,*,manual=False,now=None):
     now=time.time() if now is None else now;profile=account['profile']
@@ -26,10 +27,9 @@ def gate(account,*,manual=False,now=None):
         finished=db.execute('SELECT max(finished) FROM tasks WHERE profile=?',(profile,)).fetchone()[0] or 0
     with closing(sqlite3.connect(F/'data/studiowright.db')) as db:
         if db.execute("SELECT count(*) FROM jobs WHERE profile=? AND status IN ('queued','running')",(profile,)).fetchone()[0]:return 'account_busy'
-        row=db.execute('SELECT cooldown_until FROM pacing WHERE profile=?',(profile,)).fetchone()
-        if row and row[0]>now:return 'cooling_read_only'
-        risk=db.execute('SELECT paused FROM flow_risk WHERE profile=?',(profile,)).fetchone()
-        if risk and risk[0]:return 'account_paused'
+    restriction=account_status([account],F/'data/studiowright.db',now)[0]
+    if restriction['generation_state']=='cooling_down':return 'cooling_read_only'
+    if restriction['risk_paused'] is not False:return 'account_paused'
     from task_coordinator import Coordinator
     state=Coordinator().window(profile)
     if state and state['state']!='idle':return 'window_not_idle'

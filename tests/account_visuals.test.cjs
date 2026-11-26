@@ -589,6 +589,18 @@ test('account reason identifies running work without inventing a failure', () =>
   assert.match(reason.text, /尚未收到失败回执/);
 });
 
+test('a manually paused Flow account has its own message, separate from a risk review', () => {
+  const context=vm.createContext({});
+  load('flowLoginNotice',context);
+  load('flowAccountReason',context);
+  context.account={profile:'a',flow_operator_paused:true,flow_risk_paused:true,flow_risk_review_required:false};
+  const reason=vm.runInContext("flowAccountReason(account,{},{},'ok')",context);
+  assert.equal(reason.label,'手动暂停');
+  assert.match(reason.text,/账号操作/);
+  context.account.flow_risk_review_required=true;
+  assert.equal(vm.runInContext("flowAccountReason(account,{}, {},'ok')",context),null);
+});
+
 test('the account card shows only the matching failure screenshot', () => {
   const context = vm.createContext({});
   load('flowLoginNotice', context);

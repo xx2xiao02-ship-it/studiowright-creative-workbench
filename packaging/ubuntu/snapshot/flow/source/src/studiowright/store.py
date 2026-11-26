@@ -20,6 +20,10 @@ from studiowright import paths
 
 GENERATION_COOLDOWN_SECONDS = 30 * 60
 
+OPERATOR_PAUSE_SCHEMA = """CREATE TABLE IF NOT EXISTS flow_operator_pauses (
+    profile TEXT PRIMARY KEY, paused_at REAL NOT NULL
+);"""
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY, profile TEXT NOT NULL, title TEXT, created REAL NOT NULL
@@ -47,7 +51,7 @@ CREATE TABLE IF NOT EXISTS flow_risk_events (
     id INTEGER PRIMARY KEY, profile TEXT NOT NULL, action TEXT NOT NULL, created REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-"""
+""" + OPERATOR_PAUSE_SCHEMA
 
 
 @dataclass(frozen=True)
@@ -138,6 +142,7 @@ class Store:
                 (profile, len(profile) + 1, profile + ":"),
             )
             db.execute("DELETE FROM flow_risk WHERE profile = ?", (profile,))
+            db.execute("DELETE FROM flow_operator_pauses WHERE profile = ?", (profile,))
             db.execute("DELETE FROM flow_risk_events WHERE profile = ?", (profile,))
             for key in self._profile_settings(db, profile):
                 db.execute("DELETE FROM settings WHERE key = ?", (key,))
@@ -152,6 +157,7 @@ class Store:
                 (new, len(old) + 1, old, len(old) + 1, old + ":"),
             )
             db.execute("UPDATE flow_risk SET profile = ? WHERE profile = ?", (new, old))
+            db.execute("UPDATE flow_operator_pauses SET profile = ? WHERE profile = ?", (new, old))
             db.execute("UPDATE flow_risk_events SET profile = ? WHERE profile = ?", (new, old))
             for key in self._profile_settings(db, old):
                 db.execute(
