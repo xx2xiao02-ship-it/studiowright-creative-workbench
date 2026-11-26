@@ -178,7 +178,7 @@ test('Flow reports a verified Google challenge before stale balances and clears 
   assert.equal(row().status,'ready');
 });
 
-test('Flow card gives one direct next step for a missing binding or stale balance', () => {
+test('Flow card distinguishes missing bindings from automatic credit updates', () => {
   const account = {profile:'a', flow_login:'verified', flow_balance_fresh:false};
   const row = {status:'blocked', issues:[{key:'flow_binding',title:'任务窗口绑定待核对'},
     {key:'flow_balance',title:'未找到该账号登记的 Flow 固定任务页，保留上次余额'}]};
@@ -192,9 +192,18 @@ test('Flow card gives one direct next step for a missing binding or stale balanc
     assert.match(reason.text,/如果 Google 显示登录页.*重新登录.*点「Flow 一键就绪」/);
     assert.doesNotMatch(reason.text,/任务窗口绑定待核对|保留上次余额/);
   }
+  const blocked = vm.runInContext("flowAccountReason(account,{},row,'ok')",context);
+  assert.equal(blocked.label,'暂不可用原因');
+  row.issues.shift();
   const balance = vm.runInContext("flowAccountReason(account,{},row,'ok')",context);
-  assert.equal(balance.label,'请重新读取积分');
-  assert.doesNotMatch(balance.text,/登录/);
+  assert.equal(balance.label,'积分待更新');
+  assert.equal(balance.balancePending,true);
+  assert.match(balance.text,/空闲时自动更新积分/);
+  assert.doesNotMatch(balance.text,/登录|一键就绪/);
+  account.flow_balance_error='Flow 积分暂未显示';
+  const failed = vm.runInContext("flowAccountReason(account,{},row,'ok')",context);
+  assert.equal(failed.label,'积分读取待复查');
+  assert.match(failed.text,/积分暂未显示.*自动重试/);
   account.flow_risk_paused=true;
   assert.notEqual(vm.runInContext("flowAccountReason(account,{},row,'binding').showOnCard",context),true);
 });
@@ -544,7 +553,7 @@ test('account cards render fallback states without aborting the account list', (
     const context = vm.createContext({
       item: {profile:'test', key:'flow-account-test', gemini:'verified'}, state:{snapshot:{}},
       flow:true,
-      channelReadFailed:false, officialQuotaData:null, officialQuotaReadFailed:false,
+      channelReadFailed:false, officialQuotaData:null, officialQuotaReadFailed:false, flowReadinessObservation:null,
       flowRow:{status,issues:[]}, geminiRow:{status}, issues:[],
       flowWindowIssue: () => null, readinessBadge: row => row.status,
       officialAccount: () => ({paused:false, data:null}),
@@ -552,6 +561,7 @@ test('account cards render fallback states without aborting the account list', (
       geminiCardStatus: () => ({label: status === 'ready' ? '可调用' : '待确认', attention: status !== 'ready'}),
       Date,
     });
+    for (const name of ['flowLoginNotice','flowAccountReason']) load(name,context);
     const result = vm.runInContext(presentation + '\n({flowFallback,geminiFallback,flowStatusText,geminiStatusText});', context);
     assert.equal(result.flowStatusText, status);
     assert.equal(Boolean(result.flowFallback), status !== 'ready');

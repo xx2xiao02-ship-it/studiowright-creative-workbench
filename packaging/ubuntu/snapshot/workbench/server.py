@@ -643,6 +643,7 @@ class Sources:
             raise ValueError("Gemini 服务类型无效")
         self.gemini_source = gemini_source
         self.timeout = timeout
+        self._automatic_balance_after = {}
         # Reuse the original console's local session in memory only.
         self.opener = build_opener(ProxyHandler({}), NoRedirect(), HTTPCookieProcessor(http.cookiejar.CookieJar()))
 
@@ -1123,14 +1124,22 @@ class Sources:
             eligible = {account['profile'] for account in payload['accounts']
                         if account['repairable'] and not account['review_task']}
             eligible.difference_update(payload['busy'])
-            if automatic:
-                eligible.intersection_update(profile for profile, item in repairs.items()
-                                             if item.get('page') == 'ok' and item.get('actions'))
+            eligible.difference_update(row.get('profile') for row in state.get('remote_logins', []))
+            eligible.difference_update(profile for profile, window in windows.items()
+                                       if window.get('state') in ('result_unknown', 'needs_verification'))
             stale = [a['profile'] for a in account_rows(state) if a['profile'] in eligible
                      and checks.get(a['profile']) == 'ok' and not a['flow_balance_fresh']
                      and a['flow_login'] == 'verified' and not a['flow_page_incident']
                      and a['flow_risk_known'] and not a['flow_risk_paused']
                      and a['flow_pacing_known'] and not a['flow_cooling']]
+            if automatic:
+                now = time.monotonic()
+                self._automatic_balance_after = {p: until for p, until in self._automatic_balance_after.items()
+                                                 if until > now}
+                stale = [p for p in stale if p not in self._automatic_balance_after]
+                # The console already retries deferred reads. Keep automatic
+                # requests for an unchanged stale balance apart.
+                self._automatic_balance_after.update(dict.fromkeys(stale, now + 120))
             if stale:
                 try:
                     self.refresh_flow_balances_once(stale)

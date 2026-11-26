@@ -321,9 +321,13 @@ function flowAccountReason(account, snapshot, row, pageState, activity) {
     if (needsProject) return {label:'请打开原 Flow 项目',
       text:'在这个账号的 Ubuntu 浏览器打开原 Flow 项目。如果 Google 显示登录页，请用这个账号重新登录。完成后点「Flow 一键就绪」。',
       showOnCard:true,noScreenshot:true};
-    if (page === 'ok' && account.flow_balance_fresh === false) return {label:'请重新读取积分',
-      text:'原任务页已就绪。点「Flow 一键就绪」重新读取积分。',
-      showOnCard:true,noScreenshot:true};
+    if (page === 'ok' && account.flow_login === 'verified' && account.flow_balance_fresh === false &&
+        !row?.issues?.some(issue => issue.key !== 'flow_balance')) {
+      const error = account.flow_balance_error;
+      return {label:error ? '积分读取待复查' : '积分待更新',
+        text:error ? `${error} 后台会自动重试。` : '任务页已就绪，后台会在账号空闲时自动更新积分。',
+        balancePending:!error,showOnCard:true,noScreenshot:true};
+    }
   }
   if (row?.issues?.length) return {label:'暂不可用原因',text:row.issues.map(i => i.title).join('；')};
   if (row?.status === 'blocked') return {label:'暂不可用原因',text:'就绪检查未通过，但后台未提供具体原因，待核对。'};
@@ -347,7 +351,8 @@ function markFlowScreenshotViewed(id) {
 
 function flowAccountNoticeMarkup(reason, screenshot) {
   const id = screenshot?.id;
-  const notice = reason?.label ? `<strong>${esc(reason.label)}：</strong>${esc(reason.text)}` : '';
+  const notice = reason?.balancePending ? esc(reason.text)
+    : reason?.label ? `<strong>${esc(reason.label)}：</strong>${esc(reason.text)}` : '';
   const matches = !reason?.taskId || screenshot?.task_id === reason.taskId;
   if (matches && (screenshot?.destroyed === true || viewedFlowScreenshots.has(id))) {
     return notice ? `<p class="account-flow-reason">${notice}</p>` : '';
@@ -2644,12 +2649,15 @@ function renderAccounts() {
     const windowIssue = flowWindowIssue(item.profile, state.snapshot);
     const flowActivity = flow && state.snapshotFresh ? flowAccountActivity(item, state.snapshot) : null;
     const flowProgress = flowActivity ? `<div class="account-flow-progress" role="progressbar" aria-label="Flow · ${esc(flowActivity.stage)}" title="任务 ${esc(flowActivity.taskId)} · ${esc(flowActivity.stage)}"></div>` : '';
-    const flowFallback = (!flowActivity && !flowReady && !flowRow?.recovering && !cooling && !flowPaused && !windowIssue && !flowIssues.length)
+    const flowReason = flow ? flowAccountReason(item, state.snapshot, flowRow,
+      flowReadinessObservation?.pageChecks?.accounts?.[item.profile], flowActivity) : null;
+    const flowBalancePending = flowReason?.balancePending;
+    const flowFallback = (!flowReason?.showOnCard && !flowActivity && !flowReady && !flowRow?.recovering && !cooling && !flowPaused && !windowIssue && !flowIssues.length)
       ? ({blocked:'账号处于不可派发状态，等待就绪核对通过。', unknown:'账号状态尚未完成核对，等待下次检查。', checking:'正在验活，请稍候。'}[flowRow?.status] || '账号状态待核对，等待下次检查。') : '';
     const geminiFallback = (!item.gemini_removed && !geminiReady && !geminiIssues.length && !(geminiRow?.checking))
       ? ({blocked:'Gemini 处于不可派发状态，等待就绪核对通过。', unknown:'Gemini 状态尚未完成核对，等待下次检查。'}[geminiRow?.status] || 'Gemini 状态待核对，等待下次检查。') : '';
     // Derive each service's presentation from its own recorded state only.
-    const flowNeedsAttention = flowRow?.status==='blocked' && !cooling && !flowOperatorPaused &&
+    const flowNeedsAttention = flowRow?.status==='blocked' && !flowBalancePending && !cooling && !flowOperatorPaused &&
       (!flowActivity || flowPaused || signIn || windowIssue || item.flow_preflight_reasons?.length);
     const geminiNeedsAttention = !item.gemini_removed && geminiCard.attention;
     const needsAttention = flow ? flowNeedsAttention : geminiNeedsAttention;
@@ -2659,15 +2667,14 @@ function renderAccounts() {
       : flow && flowPaused ? ' is-flow-paused' : flow && cooling ? ' is-flow-cooling' : '') + (needsAttention ? ' is-account-issue' : '');
     const flowStatusText = pageIncident ? '已停派' : item.flow_operator_paused ? '手动暂停' : ['flow_landing','login','verification_required'].includes(flowRow?.page) ? '暂不派发'
       : item.flow_preflight_reasons?.length && !flowPaused && !cooling ? '自检未通过'
-      : flowActivity && !flowPaused && !cooling ? flowActivity.stage : readinessBadge(flowRow);
+      : flowActivity && !flowPaused && !cooling ? flowActivity.stage
+      : flowBalancePending ? flowReason.label : readinessBadge(flowRow);
     const flowHealthClass = flowPaused ? 'is-paused' : cooling ? 'is-cooling' : flowStatusText === flowActivity?.stage
       ? 'is-running' : flowRow?.status !== 'ready' ? 'is-unknown' : '';
     const cooldownSeconds = typeof item.flow_cooldown_seconds === 'number' && Number.isFinite(item.flow_cooldown_seconds) && item.flow_cooldown_seconds > 0 ? item.flow_cooldown_seconds : null;
     const cooldownEnd = cooldownSeconds === null ? null : (state.snapshotReceivedAt || Date.now()) + cooldownSeconds * 1000;
     const coolingInfo = cooling ? (cooldownSeconds === null ? '本地冷却中，剩余时间待核对。' : '圆圈内为上次读取后估算的本地冷却剩余时间；到时后请刷新核对，服务方是否恢复以实际状态为准。') : '';
     const accountKey = esc(item.key.slice("flow-account-".length));
-    const flowReason = flowAccountReason(item, state.snapshot, {...flowRow,recovering:autoFlowRecoveryProfiles.has(item.profile)},
-      flowReadinessObservation?.pageChecks?.accounts?.[item.profile], flowActivity);
     const accountProjects = (state.snapshot?.projects || []).filter(p => p.source_profile === item.profile);
     const selectedRetryProject = retryProjectDrafts.get(accountKey) ?? state.snapshot?.retry_projects?.[item.profile] ?? '';
     const ownFlow = flowTasks.filter(t => t.source_profile === item.profile);

@@ -82,32 +82,40 @@ class SelectiveReadiness(unittest.TestCase):
         self.assertEqual([a['profile'] for a in readiness_repair_accounts(payload,checks)],['pagebusy','broken'])
         self.assertEqual(len(payload['accounts']),8)
 
-    def test_auto_cleanup_refreshes_stale_credits_only_for_repaired_idle_account(self):
+    def test_auto_recovery_refreshes_stale_credits_for_ready_idle_accounts(self):
         common=dict(email='fixture@example.invalid',flow_login='verified',
                     flow_page_incident=None,flow_risk_known=True,flow_risk_paused=False,
                     flow_pacing_known=True,flow_cooling=False,flow_balance_fresh=False)
-        accounts=[dict(common,profile=profile,key='flow-account-'+profile)
-                  for profile in ('cleaned','returned','partial','untouched')]
+        profiles = ('cleaned', 'returned', 'partial', 'untouched', 'fresh', 'busy', 'paused', 'remote', 'review')
+        accounts=[dict(common,profile=p,key='flow-account-'+p,flow_balance_fresh=p=='fresh',
+                       flow_risk_paused=p=='paused') for p in profiles]
+        state = {'tasks': [], 'remote_logins': [{'profile': 'remote'}],
+                 'coordination': {'windows': [{'profile': 'review', 'state': 'needs_verification'}]}}
+        tasks = [{'source_profile': 'busy', 'source_id': 'running-task', 'status': 'running'}]
+        ready = dict.fromkeys(profiles, 'ok')
+        before = dict(ready, cleaned='unique', returned='flow_landing', partial='binding')
+        after = dict(ready, partial='binding')
         source=Sources()
-        source.read=Mock(return_value=({'tasks':[]},None))
+        source.read=Mock(return_value=(state,None))
         source.refresh_flow_balances_once=Mock()
         response=lambda data:S(stdout=json.dumps(data).encode())
         with patch('server.account_rows',return_value=accounts), \
              patch('server.project_rows',return_value=[]), \
-             patch('server.task_rows',return_value=[]), \
-             patch('server.Path',side_effect=[S(read_bytes=lambda:sys.executable.encode()),Path(sys.executable)]), \
+             patch('server.task_rows',return_value=tasks), \
+             patch('server.Path',side_effect=[S(read_bytes=lambda:sys.executable.encode()),Path(sys.executable)] * 2), \
              patch('server.subprocess.check_output',return_value='123'), \
              patch('server.subprocess.run',side_effect=[
-                 response({'cleaned':'unique','returned':'flow_landing','partial':'binding','untouched':'ok'}),
+                 response(before),
                  response({'cleaned':{'page':'ok','actions':['close_duplicate']},
                            'returned':{'page':'ok','actions':['return_to_project']},
                            'partial':{'page':'binding','actions':['open_browser']}}),
-                 response({'cleaned':'ok','returned':'ok','partial':'ok','untouched':'ok'}),
+                 response(after), response(after), response(after),
              ]) as run:
             result=source.flow_readiness(repair=True,automatic=True)
+            source.flow_readiness(repair=True,automatic=True)
         self.assertFalse(json.loads(run.call_args_list[1].kwargs['input'])['reset_draft'])
-        self.assertEqual(result['accounts'],{'cleaned':'ok','returned':'ok','partial':'ok','untouched':'ok'})
-        source.refresh_flow_balances_once.assert_called_once_with(['cleaned','returned'])
+        self.assertEqual(result['accounts'],after)
+        source.refresh_flow_balances_once.assert_called_once_with(['cleaned','returned','untouched'])
 
     def test_manual_readiness_prepares_a_project_for_the_selected_account(self):
         common = dict(email='fixture@example.invalid', flow_login='verified', flow_page_incident=None,
