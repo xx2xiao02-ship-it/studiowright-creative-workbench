@@ -1335,7 +1335,7 @@ function autoRecoverFlowPages(pageChecks) {
   const candidates = Object.entries(pageChecks?.accounts || {}).filter(([profile, value]) => {
     const account = state.snapshot?.real_accounts?.items?.find(a => a.profile === profile);
     return Date.now() >= (autoFlowRecoveryAfter.get(profile) || 0) &&
-      ['binding','project','flow_landing','editor','overlay','unconfirmed','unique'].includes(value) && !pageChecks?.review?.[profile] &&
+      ['binding','project','flow_landing','editor','overlay','unconfirmed','unique','load_failed'].includes(value) && !pageChecks?.review?.[profile] &&
       account?.flow_login === 'verified' && account?.flow_risk_paused !== true && account?.flow_cooling !== true;
   });
   if (!candidates.length) return;
@@ -1579,7 +1579,7 @@ function auditFlowAccounts(snapshot, dispatch, pageChecks, probeStartedAt) {
     const repair=pageChecks?.repairs?.[profile];
     const pageIssues={
       binding:['固定任务窗口绑定待核对','在 Flow 页的「账号检查记录」核对这个账号的固定窗口和项目。'],
-      unique:['固定任务窗口待复查','算力中心保留已绑定的任务页，只关闭同项目确认空的副本。'],
+      unique:['固定任务窗口待复查','算力中心保留已绑定的任务页，自动关闭确认空闲的多余首页和空副本。'],
       project:['任务窗口不在该账号的已登记项目','核对对应项目与固定窗口绑定。'],
       load_failed:['固定任务页加载失败','点 Flow 一键就绪，刷新原任务页并复查。'],
       draft:['固定任务窗口有草稿或附件','算力中心会保留草稿。处理后再检查就绪。'],

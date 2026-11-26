@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 from urllib.request import ProxyHandler, build_opener
 
 from flow_browser_state import _pages, focus_call
-from flow_check_readiness import composer_expression, flow_project_redirect, google_login_page, inspect_page, page_verdict
+from flow_check_readiness import FLOW_HOME_URLS, composer_expression, flow_project_redirect, google_login_page, inspect_page, page_verdict
 from flow_task_window import registration
 from task_window_registry import TaskWindowRegistry, canonical_project_url, process_identity
 
@@ -256,7 +256,7 @@ async def evaluate(ws, expression):
 
 
 async def check_duplicate(account, binding, page, remaining=None):
-    """Inspect a same-project copy and close it only after the live guards pass."""
+    """Close only a proven empty copy or unused Flow home, after fresh guards."""
     import websockets
 
     port = binding['port']
@@ -275,8 +275,15 @@ async def check_duplicate(account, binding, page, remaining=None):
             if await inspect_page(account, binding) != 'unique':
                 return False
         state = await evaluate(ws, composer_expression(account['email']))
-        if (not state or not state.get('origin') or page_verdict(state) != 'ok'
-                or state.get('path', '').rstrip('/') != urlsplit(binding['project_url']).path):
+        if not state or not state.get('origin'):
+            return False
+        verdict = page_verdict(state)
+        if page['url'] in FLOW_HOME_URLS:
+            empty = (verdict == 'editor' and state.get('account') is True
+                     and state.get('emptyHome') is True and state.get('path') == '/')
+        else:
+            empty = verdict == 'ok' and state.get('path', '').rstrip('/') == urlsplit(binding['project_url']).path
+        if not empty:
             return False
         if remaining is not None:
             await command(ws, 'Page.close')
@@ -300,7 +307,8 @@ async def reconcile_fixed_window(account, binding, actions):
     if fixed not in {p['id'] for p in tabs}:
         return 'binding'
     try:
-        if any(canonical_project_url(p['url']) != binding['project_url'] for p in tabs):
+        if any(p['url'] not in FLOW_HOME_URLS and
+               canonical_project_url(p['url']) != binding['project_url'] for p in tabs):
             return 'unique'
     except ValueError:
         return 'unique'

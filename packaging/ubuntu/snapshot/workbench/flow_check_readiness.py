@@ -10,6 +10,8 @@ from urllib.request import ProxyHandler, build_opener
 from flow_browser_state import _live_browser, _pages, focus_call
 from task_window_registry import canonical_project_url, process_identity
 
+FLOW_HOME_URLS = ('https://flow.google.com/', 'https://flow.google.com/?pli=1')
+
 
 def composer_expression(email):
     return r"""(() => {
@@ -28,7 +30,11 @@ def composer_expression(email):
       const loadFailed=status>=400 || (!account && !window.WIZ_global_data && boxes.length===0 &&
         document.readyState==='complete' &&
         (!bodyText || /^(failed to load (?:the )?project|项目加载失败)[.!。]?$/i.test(bodyText)));
-      return {origin:true,path:location.pathname,account,login,loadFailed,
+      const emptyHome=FLOW_HOME_URLS.includes(location.href) && document.readyState==='complete' &&
+        !document.querySelector('flow-prompt-box,flow-base-prompt-box,[contenteditable=true],textarea,input[type=file]') &&
+        ![...document.querySelectorAll('input')].some(e=>visible(e) &&
+          (['checkbox','radio'].includes(e.type) ? e.checked!==e.defaultChecked : e.value.trim()));
+      return {origin:true,path:location.pathname,account,login,loadFailed,emptyHome,
         busy:[...document.querySelectorAll('[role=progressbar],[aria-busy=true]')].some(visible),
         overlay:[...document.querySelectorAll('[role=dialog],[aria-modal=true],flow-change-log-modal')].some(visible),
         draft:[...document.querySelectorAll('flow-prompt-box [contenteditable=true],flow-base-prompt-box [contenteditable=true]')]
@@ -37,7 +43,7 @@ def composer_expression(email):
           [...document.querySelectorAll('input[type=file]')].some(e=>e.files?.length),
         editor:boxes.filter(e=>visible(e) && e.getAttribute('aria-disabled')!=='true').length===1 &&
           [...document.querySelectorAll('flow-prompt-box button mat-icon')].some(i=>i.textContent.trim()==='arrow_forward'&&visible(i))};
-    })()""".replace('EXPECTED', json.dumps(email.lower()))
+    })()""".replace('FLOW_HOME_URLS', json.dumps(FLOW_HOME_URLS)).replace('EXPECTED', json.dumps(email.lower()))
 
 
 def page_verdict(state):

@@ -53,16 +53,27 @@ class AutomaticRecoverySafety(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['fixture']['page'],'login')
         action.assert_not_awaited()
 
-    async def test_duplicate_cleanup_retains_binding_and_requires_empty_project_pages(self):
+    async def test_duplicate_cleanup_retains_binding_and_requires_empty_project_or_home_pages(self):
         project='https://flow.google.com/project/11111111-1111-4111-8111-111111111111'
         account=dict(profile='fixture',key='flow-account-'+'a'*64,email='fixture@example.invalid')
         binding=dict(account_key='a'*64,browser_pid=123,port=9222,page_target='fixed',project_url=project)
         endpoint='ws://127.0.0.1:9222/devtools/page/copy'
         fixed=dict(id='fixed',url=project)
-        copy=dict(id='copy',url=project,webSocketDebuggerUrl=endpoint)
         empty=dict(origin=True,account=True,editor=True,path=project.removeprefix('https://flow.google.com'))
-        for state, expected in ((empty,'ok'), (dict(empty,draft=True),'unique'), (dict(empty,busy=True),'unique')):
-            with self.subTest(expected=expected, state=state):
+        home='https://flow.google.com/'
+        empty_home=dict(origin=True,account=True,editor=False,path='/',emptyHome=True)
+        cases = [(project, empty, 'ok'), (project, dict(empty,draft=True), 'unique'),
+                 (project, dict(empty,busy=True), 'unique'), (home, empty_home, 'ok'),
+                 (home+'?pli=1', empty_home, 'ok'),
+                 (home+'?unrecognized=1', empty_home, 'unique'),
+                 (home, dict(empty_home,emptyHome=False), 'unique'),
+                 (home, dict(empty_home,overlay=True), 'unique'),
+                 (home, dict(empty_home,account=False), 'unique'),
+                 (home, dict(empty_home,draft=True), 'unique'),
+                 (home+'about?returnUrl=%2Fproject%2Fother', empty_home, 'unique')]
+        for url, state, expected in cases:
+            with self.subTest(url=url, expected=expected, state=state):
+                copy=dict(id='copy',url=url,webSocketDebuggerUrl=endpoint)
                 fake_websockets=types.SimpleNamespace(connect=Mock(return_value=AsyncMock()))
                 with patch.dict(sys.modules,websockets=fake_websockets), \
                      patch('flow_window_policy.Lifecycle') as lifecycle, \

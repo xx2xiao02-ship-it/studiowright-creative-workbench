@@ -87,7 +87,7 @@ class SelectiveReadiness(unittest.TestCase):
                     flow_page_incident=None,flow_risk_known=True,flow_risk_paused=False,
                     flow_pacing_known=True,flow_cooling=False,flow_balance_fresh=False)
         accounts=[dict(common,profile=profile,key='flow-account-'+profile)
-                  for profile in ('cleaned','untouched')]
+                  for profile in ('cleaned','returned','partial','untouched')]
         source=Sources()
         source.read=Mock(return_value=({'tasks':[]},None))
         source.refresh_flow_balances_once=Mock()
@@ -98,13 +98,15 @@ class SelectiveReadiness(unittest.TestCase):
              patch('server.Path',side_effect=[S(read_bytes=lambda:sys.executable.encode()),Path(sys.executable)]), \
              patch('server.subprocess.check_output',return_value='123'), \
              patch('server.subprocess.run',side_effect=[
-                 response({'cleaned':'unique','untouched':'ok'}),
-                 response({'cleaned':{'page':'ok','actions':['close_duplicate']}}),
-                 response({'cleaned':'ok','untouched':'ok'}),
+                 response({'cleaned':'unique','returned':'flow_landing','partial':'binding','untouched':'ok'}),
+                 response({'cleaned':{'page':'ok','actions':['close_duplicate']},
+                           'returned':{'page':'ok','actions':['return_to_project']},
+                           'partial':{'page':'binding','actions':['open_browser']}}),
+                 response({'cleaned':'ok','returned':'ok','partial':'ok','untouched':'ok'}),
              ]):
             result=source.flow_readiness(repair=True,automatic=True)
-        self.assertEqual(result['accounts'],{'cleaned':'ok','untouched':'ok'})
-        source.refresh_flow_balances_once.assert_called_once_with(['cleaned'])
+        self.assertEqual(result['accounts'],{'cleaned':'ok','returned':'ok','partial':'ok','untouched':'ok'})
+        source.refresh_flow_balances_once.assert_called_once_with(['cleaned','returned'])
 
     def test_manual_readiness_prepares_a_project_for_the_selected_account(self):
         common = dict(email='fixture@example.invalid', flow_login='verified', flow_page_incident=None,

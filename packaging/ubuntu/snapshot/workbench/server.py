@@ -1099,9 +1099,8 @@ class Sources:
                         if account['repairable'] and not account['review_task']}
             eligible.difference_update(payload['busy'])
             if automatic:
-                balance_refresh_actions = {'reload', 'close_duplicate', 'recheck_window'}
                 eligible.intersection_update(profile for profile, item in repairs.items()
-                                             if balance_refresh_actions.intersection(item.get('actions', ())))
+                                             if item.get('page') == 'ok' and item.get('actions'))
             stale = [a['profile'] for a in account_rows(state) if a['profile'] in eligible
                      and checks.get(a['profile']) == 'ok' and not a['flow_balance_fresh']
                      and a['flow_login'] == 'verified' and not a['flow_page_incident']
@@ -1934,9 +1933,13 @@ def make_handler(sources, deployment="local", coordinator=None, real_pool=None, 
                 if not real_pool or maintenance_blocked or not FLOW_READINESS_LOCK.acquire(blocking=False):
                     return self.json_response(409,{'error':'工作台正在维护或已有一轮就绪检查，请稍后再试。'})
                 try:
-                    result = sources.flow_readiness(repair=True,manual_review=(raw['account'],raw['task']) if manual else None,
-                        automatic=self.path.endswith('/auto'), account_key=None if manual else raw.get('account'),
-                        prepare_project=real_pool.prepare_readiness_project if self.path == '/api/flow-readiness' else None)
+                    if self.path.endswith('/auto'):
+                        result = sources.flow_readiness(repair=True, manual_review=None, automatic=True)
+                    elif manual:
+                        result = sources.flow_readiness(repair=True, manual_review=(raw['account'], raw['task']))
+                    else:
+                        result = sources.flow_readiness(repair=True, account_key=raw.get('account'),
+                                                        prepare_project=real_pool.prepare_readiness_project)
                     if manual and not result.get('released'):
                         return self.json_response(409,{'error':'原任务或账号状态已变化，未放行；请重新检查。'})
                     return self.json_response(200,result)
