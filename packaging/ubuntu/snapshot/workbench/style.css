@@ -94,8 +94,11 @@ button:disabled { cursor: wait; opacity: .6; }
 .account-quota-window { min-width: 0; }
 .account-quota-label { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; color: #526d62; font-size: 11px; }
 .account-quota-label strong { color: #315f4d; font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.account-quota-track { height: 4px; margin-top: 5px; overflow: hidden; border-radius: 6px; background: #e0e8e4; }
-.account-quota-track i { display: block; height: 100%; border-radius: inherit; background: #679d7c; }
+.account-quota-track { display: block; width: 100%; height: 4px; margin-top: 5px; overflow: hidden; border: 0; border-radius: 6px; background: #e0e8e4; }
+progress.account-quota-track { appearance: none; }
+.account-quota-track::-webkit-progress-bar { background: #e0e8e4; border-radius: inherit; }
+.account-quota-track::-webkit-progress-value { background: #679d7c; border-radius: inherit; }
+.account-quota-track::-moz-progress-bar { background: #679d7c; border-radius: inherit; }
 .account-quota-track.is-unknown { background: repeating-linear-gradient(120deg,#e1e7e4,#e1e7e4 5px,#f2f5f3 5px,#f2f5f3 8px); }
 .account-quota-reset { display: block; margin-top: 4px; color: #60746a; font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
 .account-quota-note { margin: 9px 0 0; color: #60746a; font-size: 10px; line-height: 1.5; }

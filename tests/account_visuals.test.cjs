@@ -324,16 +324,21 @@ test('a missing Gemini quota is neutral, and a confirmed zero stays visible', ()
   for (const status of ['not_read', 'unavailable', 'network_error', 'eligibility_failed']) {
     const {message, html} = show({status});
     assert.equal(message, '额度暂未获取');
-    assert.doesNotMatch(html, /aria-valuenow=/);
+    assert.doesNotMatch(html, /<progress/);
   }
   const partial = show({status: 'ok', checked_at: now, five_hour: {remaining_percent: 0}});
   assert.equal(partial.message, '部分额度待读取');
-  assert.match(partial.html, /aria-valuenow="0"/);
+  assert.match(partial.html, /<progress[^>]*max="100" value="0"/);
   assert.match(partial.html, /每周<\/span><strong>待读取/);
   const stale = show({status: 'ok', checked_at: now - 601, weekly: {remaining_percent: 100}});
   assert.match(stale.message, /上次读取.*部分额度待读取/);
   assert.match(stale.html, /5 小时<\/span><strong>待读取/);
   assert.match(stale.html, /每周<\/span><strong>100%/);
+  assert.match(stale.html, /<progress[^>]*value="100"/);
+  const ranged = show({status:'ok', checked_at:now, five_hour:{remaining_percent:74}, weekly:{remaining_percent:94.5}});
+  assert.match(ranged.html, /<progress[^>]*value="74"/);
+  assert.match(ranged.html, /<progress[^>]*value="94\.5"/);
+  assert.doesNotMatch(ranged.html, /style=/);
   assert.match(show({status: 'authorization_required'}).message, /重新授权/);
 });
 
@@ -381,7 +386,7 @@ test('quota refresh keeps the card tooltip in sync with partial and complete dat
   vm.runInContext('renderAccountQuotas()', context);
   assert.equal(service.title, 'Gemini：可调用');
   assert.equal(service['aria-label'], service.title);
-  assert.match(panel.innerHTML, /aria-valuenow="0"/);
+  assert.match(panel.innerHTML, /<progress[^>]*value="0"/);
 });
 
 test('Gemini readiness requests quota recovery and still finishes when quota is unavailable', async () => {

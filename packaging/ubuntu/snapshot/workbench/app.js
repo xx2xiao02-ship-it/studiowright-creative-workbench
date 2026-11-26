@@ -2146,7 +2146,10 @@ function accountOfficialQuotaMarkup(key) {
       : value < 100 ? '恢复时间待官方更新' : '';
     const hint = recovery || (value !== null && !fresh ? '上次读取的剩余比例' : '');
     const tip = hint ? title+' · '+hint : title;
-    return `<div class="account-quota-window" title="${esc(tip)}"><div class="account-quota-label"><span>${label}</span><strong>${text}</strong></div><div class="account-quota-track${value === null ? ' is-unknown' : ''}" ${value === null ? `role="img" aria-label="Gemini ${title}尚未读取"` : `role="progressbar" aria-label="Gemini ${title}剩余" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${value}"`}>${value === null ? '' : `<i style="width:${value}%"></i>`}</div></div>`;
+    const meter = value === null
+      ? `<div class="account-quota-track is-unknown" role="img" aria-label="Gemini ${title}尚未读取"></div>`
+      : `<progress class="account-quota-track" aria-label="Gemini ${title}剩余" max="100" value="${value}"></progress>`;
+    return `<div class="account-quota-window" title="${esc(tip)}"><div class="account-quota-label"><span>${label}</span><strong>${text}</strong></div>${meter}</div>`;
   };
   const quotaReason = {
     verification_required:row?.reason==='provider_validation_no_entry' ? '额度查询受限，Google 未提供验证入口' : 'Google 验证尚未通过，额度暂不可读',
