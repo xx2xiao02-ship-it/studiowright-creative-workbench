@@ -9,6 +9,7 @@ from pathlib import Path
 
 MAX_GENERATION_RETRIES = 3
 SAFE_VIDEO_RETRY = frozenset(('transient_before_submit', 'provider_rejected_unusual'))
+PROVIDER_REFUSALS = frozenset(('provider_rejected_unusual', 'provider_rejected_error_7'))
 RETRY_KINDS = frozenset(('image', 'video'))
 SESSION_IMPORT_INTERRUPTED = '登录核对因后台重启中断。请从 Windows 账号助手重新发起同步。'
 
@@ -344,7 +345,7 @@ class Store:
             root, ordinal = attempt["root_id"], attempt["ordinal"]
             if not error:
                 state = 'succeeded' if result and result.get('files') else 'needs_review'
-            elif retry_evidence == 'confirmed_before_submit':
+            elif retry_evidence in ('confirmed_before_submit', 'provider_rejected_error_7'):
                 state = 'manual_failed'
             elif attempt['reason'] == 'same_account':
                 state = 'manual_failed' if retry_evidence in SAFE_VIDEO_RETRY else 'needs_review'

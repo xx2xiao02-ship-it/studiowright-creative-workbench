@@ -82,7 +82,8 @@ class FlowVideoPipeline(unittest.IsolatedAsyncioTestCase):
                     kwargs = dict(page=page, composer=composer, submit_button=button,
                                   credits_warning=object(), target=Target('fixture', 42, 8, 0),
                                   prompt=prompt, queue=None, driver=driver, reserved=True,
-                                  on_submit=lambda: actions.append('checkpoint'))
+                                  on_submit=lambda: actions.append('checkpoint'),
+                                  on_click=lambda: actions.append('click'))
                     with patch('foreground_input.random.randint', return_value=2), \
                             patch('foreground_input.Path.home', return_value=Path(home)), \
                             patch('foreground_input._pacing_wait', AsyncMock()), \
@@ -96,8 +97,36 @@ class FlowVideoPipeline(unittest.IsolatedAsyncioTestCase):
                             self.assertEqual(editor, prompt)
                             prefix_input = [('paste', 'A\n')] if scenario == 'multiline' else [('insert', 'A'), ('insert', ' ')]
                             self.assertEqual(actions, [
-                                *prefix_input, ('delete', prompt[:2]), ('paste', prompt), 'checkpoint', 'submit',
+                                *prefix_input, ('delete', prompt[:2]), ('paste', prompt),
+                                'checkpoint', 'click', 'submit',
                             ])
+
+    async def test_submit_timing_is_recorded_once_only_after_desktop_lease_release(self):
+        with flow_modules(), tempfile.TemporaryDirectory() as home:
+            from foreground_lease import ForegroundLease
+            from task_coordinator import Coordinator
+
+            coordinator = Coordinator(Path(home) / 'coordination')
+            coordinator.begin('fixture', 'submit-task')
+
+            async def release(*_):
+                self.assertEqual([event['action'] for event in coordinator.events('submit-task')],
+                                 ['task_preparation_started'])
+
+            manager = SimpleNamespace(__aenter__=AsyncMock(), __aexit__=AsyncMock(side_effect=release))
+            with patch('foreground_lease.ForegroundQueue', return_value=SimpleNamespace(
+                    acquire_async=Mock(return_value=manager))), \
+                    patch('foreground_lease.time', SimpleNamespace(monotonic=Mock(side_effect=[3.0, 3.042]))):
+                lease = ForegroundLease()
+                await lease.acquire()
+                lease.mark_submit_click()
+                await lease.release()
+                await lease.release()
+
+            manager.__aexit__.assert_awaited_once()
+            event = coordinator.events('submit-task')[-1]
+            self.assertEqual(event['action'], 'submit_to_focus_release')
+            self.assertEqual(json.loads(event['detail']), {'elapsed_ms': 42})
 
     async def test_foreground_preparation_refreshes_before_activation_and_preserves_drafts(self):
         with flow_modules():
@@ -399,18 +428,21 @@ class FlowVideoPipeline(unittest.IsolatedAsyncioTestCase):
                     console.store.update_account('fixture', 'fixture@example.test', 'verified')
                     console.store.project('fixture', project, 'FLOW+fixture')
                     task = console.store.create_task('fixture', project, kind, {'count': 1},
-                                                     str(uuid.uuid4()), auto_retry=False)
+                                                     str(uuid.uuid4()), auto_retry=kind == 'image')
                     with patch.object(flow_page, 'ReplyWatch', return_value=watch), \
                             patch('task_coordinator.Coordinator', return_value=SimpleNamespace(events=lambda _: [])):
                         await console.execute(console.store.claim(set()))
                     completed = console.store.task(task['id'])
                     self.assertEqual(completed['status'], 'failed')
+                    self.assertEqual(console.store.retry_detail(task['id'])['state'], 'manual_failed')
+                    self.assertIsNone(console.store.claim(set()))
                     receipt, = completed['result']['source_jobs']
                     rejection = receipt['provider_rejection']
                     self.assertEqual(rejection, {'http_status': status, 'flow_code': code, 'reason': reason,
                                                  'observed_at': rejection['observed_at']})
                     self.assertLessEqual(receipt['submit_checkpoint_at'], rejection['observed_at'])
-                    studio.governor.report_unusual_activity.assert_called_once()
+                    studio.governor.report_unusual_activity.assert_called_once_with(
+                        error_code=7 if kind == 'image' else None)
 
     async def test_project_grid_does_not_choose_a_different_videos_poster(self):
         with flow_modules():

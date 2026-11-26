@@ -922,7 +922,9 @@ class FlowPage:
     async def _type_and_submit(
         self, prompt: str, on_submit: Callable[[], None] | None = None
     ) -> None:
-        if self._foreground_lease and self._foreground_lease.active:
+        lease = self._foreground_lease
+        reserved = bool(lease and lease.active)
+        if reserved:
             await self.dismiss_flow_changelog()
         # Opt in explicitly; without this local marker the original path is unchanged.
         from pathlib import Path
@@ -944,6 +946,8 @@ class FlowPage:
             # do not submit anything. A lost reply after this point is not a failure.
             if on_submit is not None:
                 on_submit()
+            if reserved:
+                lease.mark_submit_click()
             await submit.click()
             return
         # This function runs only inside the existing account/profile lock.
@@ -959,16 +963,16 @@ class FlowPage:
         from provider_paste_hooks import flow_submit
         from wayland_desktop_driver import WaylandDesktopDriver
         queue = ForegroundQueue(Path.home() / '.local/state/creative-unified-workbench/foreground-input')
-        reserved = bool(self._foreground_lease and self._foreground_lease.active)
         target = self._foreground_target if reserved else await find_flow_target(self.session, self.page, call)
         composer = self.page.locator(s.COMPOSER).first
         await flow_submit(page=self.page, composer=composer,
             submit_button=self.page.locator(s.SUBMIT).first,
             credits_warning=self.page.locator(s.CREDITS_WARNING),
             target=target, prompt=prompt, queue=queue,
-            driver=WaylandDesktopDriver(gui_env()), on_submit=on_submit, reserved=reserved)
+            driver=WaylandDesktopDriver(gui_env()), on_submit=on_submit, reserved=reserved,
+            on_click=lease.mark_submit_click if reserved else None)
         if reserved:
-            await self._foreground_lease.release()
+            await lease.release()
 
     async def generate_images(
         self, prompt: str, count: int = 1, timeout_s: float | None = None,

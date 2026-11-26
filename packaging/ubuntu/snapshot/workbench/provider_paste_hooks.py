@@ -5,7 +5,7 @@ from foreground_input import paste_and_submit, paste_and_submit_reserved
 
 
 async def flow_submit(*, page, composer, submit_button, credits_warning,
-                      target, prompt, queue, driver, on_submit=None, reserved=False):
+                      target, prompt, queue, driver, on_submit=None, reserved=False, on_click=None):
     async def checkpoint():
         deadline = time.monotonic() + 5
         while await submit_button.is_disabled():
@@ -20,6 +20,8 @@ async def flow_submit(*, page, composer, submit_button, credits_warning,
         # An eased in-page trajectory instead of an instant synthetic teleport.
         box = await submit_button.bounding_box()
         if not box:
+            if on_click is not None:
+                on_click()
             await submit_button.click()
             return
         import random
@@ -36,6 +38,8 @@ async def flow_submit(*, page, composer, submit_button, credits_warning,
             await asyncio.sleep(random.uniform(.02, .05))
         await page.mouse.down()
         await asyncio.sleep(random.uniform(.06, .14))
+        if on_click is not None:
+            on_click()
         await page.mouse.up()
     kwargs = dict(driver=driver, page=page, composer=composer, target=target,
                   prompt=prompt, checkpoint=checkpoint, submit=submit, hybrid=True)

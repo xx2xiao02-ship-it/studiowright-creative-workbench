@@ -492,8 +492,11 @@ class Studio:
         result = json.loads(job["result"]) if job and job["result"] else {}
         params = json.loads(job["params"]) if job and job["params"] else {}
         stage, media = result.get("stage"), result.get("media_ids", [])
-        if site == FLOW_ROOT and isinstance(exc, UnusualActivity) and exc.reply_diagnostics is not None:
-            result["provider_rejection"] = exc.reply_diagnostics
+        rejection = exc.reply_diagnostics if isinstance(exc, UnusualActivity) else None
+        error_code = (rejection["flow_code"]
+                      if rejection and rejection["reason"] == "PUBLIC_ERROR_UNUSUAL_ACTIVITY" else None)
+        if site == FLOW_ROOT and rejection is not None:
+            result["provider_rejection"] = rejection
         try:
             project_id = job["project_id"] if job else None
             shot = await self._capture_failure_page(job_id, site, project_id, page)
@@ -504,11 +507,13 @@ class Studio:
                     result["warning_screenshot"] = shot.name
                 if isinstance(exc, FlowError | PlaywrightError):
                     exc.args = (f"{exc.args[0] if exc.args else exc} (screenshot: {shot})",)
-            # Only narrow, positively identified cases are safe to retry. Any missing
-            # stage, accepted id, partial result, or failure after clicking is unknown.
+            # Keep verified provider refusals distinct from ambiguous outcomes.
+            # A confirmed error 7 is terminal for automatic resubmission.
             if (stage == "submitting" and not media and params.get("count") == 1
                     and isinstance(exc, SubmissionRejectedUnusual)):
-                result["retry_evidence"] = "provider_rejected_unusual"
+                result["retry_evidence"] = (
+                    "provider_rejected_error_7" if error_code == 7 else "provider_rejected_unusual"
+                )
             elif (stage == "preparing" and not media
                   and isinstance(exc, (ReferenceUploadBlocked, PlaywrightTimeout, TimeoutError, ConnectionError))):
                 result["retry_evidence"] = "transient_before_submit"
@@ -520,7 +525,7 @@ class Studio:
                 # Cooldown stops the account's managed Chrome. Save the evidence first
                 # while the job still owns its project tab and account lock.
                 try:
-                    self.governor.report_unusual_activity()
+                    self.governor.report_unusual_activity(error_code=error_code)
                 except Exception:
                     log.exception("Unable to record Flow cooldown for job %s", job_id)
 

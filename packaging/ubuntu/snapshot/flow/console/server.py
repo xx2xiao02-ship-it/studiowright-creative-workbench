@@ -23,7 +23,7 @@ from account_pacing import account_status, resume_after_review
 from adapter import AccountWindowBusy, PreSubmissionTransient, PreSubmissionFailure
 from api_keys import APIKeys
 from account_insights import Insights
-from console_store import MAX_GENERATION_RETRIES, RETRY_KINDS, SESSION_IMPORT_INTERRUPTED, Store
+from console_store import MAX_GENERATION_RETRIES, PROVIDER_REFUSALS, RETRY_KINDS, SESSION_IMPORT_INTERRUPTED, Store
 from dispatch_limit import DispatchLimit
 from flow_proxy_guard import exit_bindings, mapped_ports, release_removed_exits, reserve_confirmed_exit
 from flow_references import REFERENCE_FIELDS, ReferenceStore, task_reference_ids
@@ -247,7 +247,7 @@ class Console:
                     if (source['status'] == 'failed' and source['project_id'] == task['project']
                             and source['profile'] == task['profile'] and source['kind'] == task['kind'] and not raw.get('media_ids') and not raw.get('files')
                             and ((evidence in ('transient_before_submit', 'confirmed_before_submit') and stage == 'preparing')
-                                 or (evidence == 'provider_rejected_unusual' and stage == 'submitting'
+                                 or (evidence in PROVIDER_REFUSALS and stage == 'submitting'
                                      and task['params'].get('count') == 1))):
                         retry_evidence = evidence
                 elif (not linked and self.store.retry_detail(task['id']) and (
@@ -333,7 +333,7 @@ class Console:
                 if (isinstance(result, dict) and source['status'] == 'failed' and source['profile'] == task['profile']
                         and source['project_id'] == task['project'] and source['kind'] == task['kind']
                         and result.get('stage') == 'submitting'
-                        and result.get('retry_evidence') == 'provider_rejected_unusual'
+                        and result.get('retry_evidence') in PROVIDER_REFUSALS
                         and not result.get('media_ids') and not result.get('files')):
                     coordinator.release_confirmed_rejection(task['profile'], task['id'])
 

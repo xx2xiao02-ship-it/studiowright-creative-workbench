@@ -19,7 +19,7 @@ class FlowPacing(unittest.TestCase):
         self.store = Store(self.path)
         self.now = time.time()
 
-    def test_generation_refusals_always_have_a_thirty_minute_cooldown(self):
+    def test_generic_generation_refusals_keep_the_thirty_minute_cooldown(self):
         save_pace(self.store, 'generation', {'cooldown_s': 7200})
         with patch.dict('os.environ', {'STUDIOWRIGHT_COOLDOWN_S': '10800'}):
             self.assertEqual(PaceSettings.load(self.store, 'generation').cooldown_s, 1800)
@@ -34,6 +34,42 @@ class FlowPacing(unittest.TestCase):
                         governor.reserve(cooldown - 1)
             with self.assertRaises(RiskPaused):
                 governor.reserve(cooldown + 1)
+
+    def test_second_consecutive_error_7_pauses_only_that_account_and_records_one_alert(self):
+        governor = Governor(self.store, 'generation')
+        unaffected = Governor(self.store, 'other')
+        with patch('subprocess.run'):
+            cooldown = governor.report_unusual_activity(self.now, error_code=7)
+            self.assertEqual(cooldown, self.now + 900)
+            governor = Governor(Store(self.path), 'generation')
+            self.assertEqual(governor.status()['cooldown_until'], cooldown)
+            with self.assertRaises(CoolingDown):
+                governor.reserve(cooldown - 1)
+            self.assertEqual(unaffected.reserve(cooldown - 1), 0)
+            with self.assertLogs('studiowright.pacing', level='WARNING') as alerts:
+                cooldown = governor.report_unusual_activity(cooldown + 1, error_code=7)
+            self.assertEqual(len(alerts.records), 1)
+            self.assertIn('after two consecutive error 7 refusals', alerts.records[0].getMessage())
+            with self.assertRaises(RiskPaused):
+                governor.reserve(cooldown + 1)
+        with self.store.connect() as db:
+            events = [row['action'] for row in db.execute('SELECT action FROM flow_risk_events ORDER BY id')]
+        self.assertEqual(events, ['unusual', 'unusual_error_7', 'unusual', 'unusual_error_7',
+                                  'paused_after_error_7'])
+
+    def test_success_resets_error_7_streak_and_an_existing_longer_cooldown_is_preserved(self):
+        governor = Governor(self.store, 'generation')
+        with patch('subprocess.run'):
+            until = governor.report_unusual_activity(self.now)
+            # A legacy/generic refusal does not count as the first error 7.
+            self.assertEqual(governor.report_unusual_activity(self.now + 10, error_code=7), until)
+            self.assertEqual(governor.reserve(until + 1), 0)
+            governor.report_success()
+            until = governor.report_unusual_activity(until + 2, error_code=7)
+            self.assertEqual(governor.reserve(until + 1), 0)
+        with self.store.connect() as db:
+            risk = db.execute('SELECT consecutive, paused FROM flow_risk').fetchone()
+        self.assertEqual(tuple(risk), (1, 0))
 
     def test_existing_cooldowns_keep_the_original_start_and_review_status(self):
         with self.store.transaction() as db:
