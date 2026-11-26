@@ -76,13 +76,13 @@ class FlowVideoPipeline(unittest.IsolatedAsyncioTestCase):
                     )
                     button = SimpleNamespace(
                         is_disabled=AsyncMock(return_value=False),
-                        bounding_box=AsyncMock(return_value=None),
                         click=AsyncMock(side_effect=lambda: actions.append('submit')),
                     )
                     kwargs = dict(page=page, composer=composer, submit_button=button,
                                   credits_warning=object(), target=Target('fixture', 42, 8, 0),
                                   prompt=prompt, queue=None, driver=driver, reserved=True,
-                                  on_submit=lambda: actions.append('checkpoint'))
+                                  on_submit=lambda: actions.append('checkpoint'),
+                                  on_click=lambda: actions.append('click_started'))
                     with patch('foreground_input.random.randint', return_value=2), \
                             patch('foreground_input.Path.home', return_value=Path(home)), \
                             patch('foreground_input._pacing_wait', AsyncMock()), \
@@ -96,7 +96,7 @@ class FlowVideoPipeline(unittest.IsolatedAsyncioTestCase):
                             self.assertEqual(editor, prompt)
                             prefix_input = [('paste', 'A\n')] if scenario == 'multiline' else [('insert', 'A'), ('insert', ' ')]
                             self.assertEqual(actions, [
-                                *prefix_input, ('delete', prompt[:2]), ('paste', prompt), 'checkpoint', 'submit',
+                                *prefix_input, ('delete', prompt[:2]), ('paste', prompt), 'checkpoint', 'click_started', 'submit',
                             ])
 
     async def test_foreground_preparation_refreshes_before_activation_and_preserves_drafts(self):

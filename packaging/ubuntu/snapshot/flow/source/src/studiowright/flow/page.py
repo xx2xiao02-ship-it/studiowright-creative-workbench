@@ -601,7 +601,6 @@ class FlowPage:
         for _ in range(4):
             if await pane.count():
                 return pane.first
-            await self.page.mouse.move(5, 5)
             await self.page.locator(s.READY).first.click()
             try:
                 await pane.first.wait_for(state="visible", timeout=1500)

@@ -85,18 +85,6 @@ async def _pacing_wait(record, account_key):
         await asyncio.sleep(min(account_wait, 120.0))
 
 
-async def _pointer_drift(driver, target):
-    """Small real pointer movements while the window keeps focus."""
-    try:
-        from input_backend import open_pointer
-        pointer = open_pointer(target, gui_environment=getattr(driver, 'env', None))
-        for _ in range(random.randint(3, 6)):
-            await pointer.move(random.randint(-70, 70), random.randint(-24, 24))
-            await asyncio.sleep(random.uniform(.08, .22))
-    except Exception:
-        pass
-
-
 async def _hid_keyboard(driver, target):
     """Return a ready HID keyboard, or ``None`` when the portal backend is chosen."""
     from input_backend import open_keyboard
@@ -303,9 +291,6 @@ async def paste_and_submit_reserved(*, driver, page, composer, target, prompt,
                                    ('hid_clipboard_paste_verified' if hid_backend else
                                     ('cdp_typed_verified' if mode == 'cdp_type' else 'pasted_text_verified')),
                                    characters=len(prompt))
-                # A human looks the text over before sending; the real pointer drifts meanwhile.
-                await asyncio.sleep(random.uniform(1.5, 4.0))
-                await _pointer_drift(driver, target)
             # Must durably mark the boundary before invoking the submit action.
             await checkpoint()
     except InputNotSubmitted:
