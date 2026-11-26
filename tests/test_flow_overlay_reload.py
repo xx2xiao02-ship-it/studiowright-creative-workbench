@@ -223,3 +223,21 @@ class FlowOverlayReload(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(actions, ['reset_draft'])
             self.assertEqual([c.args[2] for c in command.await_args_list if c.args[1] == 'Page.reload'],
                              [{'loaderId': 'old'}])
+
+    async def test_busy_project_can_reload_only_after_the_editor_is_idle(self):
+        ready = dict(origin=True, account=True, editor=True, path=STATE['path'])
+        busy = dict(ready, busy=True)
+        old = {'frameTree': {'frame': {'url': PROJECT, 'loaderId': 'old'}}}
+        new = {'frameTree': {'frame': {'url': PROJECT, 'loaderId': 'new'}}}
+        for cleared in (True, False):
+            actions = []
+            states = [busy, ready, ready, ready] if cleared else [busy] * 5
+            with patch.object(recovery, 'guard_live'), \
+                    patch.object(recovery, 'command', AsyncMock(side_effect=[old, {}, new])) as command, \
+                    patch.object(recovery, 'evaluate', AsyncMock(side_effect=states)), \
+                    patch.object(recovery.asyncio, 'sleep', AsyncMock()):
+                result = await recovery.reload_fixed_project(None, {}, '', PROJECT, actions, 'busy')
+            self.assertEqual(result, ready if cleared else busy)
+            self.assertEqual(actions, ['reload'] if cleared else [])
+            self.assertEqual([c.args[2] for c in command.await_args_list if c.args[1] == 'Page.reload'],
+                             [{'loaderId': 'old'}] if cleared else [])

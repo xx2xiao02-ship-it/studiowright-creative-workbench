@@ -406,6 +406,12 @@ def restart_managed(binding, allow_responsive=False):
 
 
 async def reload_fixed_project(ws, account, expected, project, actions, issue):
+    if issue == 'busy':
+        # A progress indicator may belong to a generation started directly in Flow.
+        for _ in range(4):
+            if page_verdict(await evaluate(ws, expected)) != 'busy':
+                break
+            await asyncio.sleep(.5)
     await asyncio.to_thread(guard_live, account)
     frame = (await command(ws, 'Page.getFrameTree'))['frameTree']['frame']
     state = await evaluate(ws, expected)
@@ -413,7 +419,7 @@ async def reload_fixed_project(ws, account, expected, project, actions, issue):
     if (canonical_project_url(frame['url']) != project or not state.get('origin')
             or state.get('path', '').rstrip('/') != project_path):
         return {}
-    if (state.get('overlay') or page_verdict(state) != issue
+    if (state.get('overlay') or page_verdict(state) != ('ok' if issue == 'busy' else issue)
             or (issue == 'draft' and not state.get('account'))):
         return state
     await asyncio.wait_for(command(ws, 'Page.reload', {'loaderId': frame['loaderId']}), timeout=3)
@@ -511,11 +517,13 @@ async def repair(account, initial, actions, safe_only=False, reset_draft=False):
             verdict = page_verdict(before)
             if verdict in ('login', 'verification_required', 'flow_landing') or (redirected and verdict != 'ok'):
                 return verdict,None
-            if verdict == 'load_failed' or (verdict == 'draft' and reset_draft):
+            if verdict == 'load_failed' or (verdict == 'draft' and reset_draft) or (
+                    initial == 'busy' and verdict in ('busy', 'ok')):
                 if (not same or not old or old.get('binding_state') != 'verified'
                         or old.get('project_url') != project or any(old.get(k)!=v for k,v in current.items())):
                     return 'binding',None
-                before = await reload_fixed_project(ws, account, expected, project, actions, verdict)
+                issue = 'busy' if initial == 'busy' and verdict in ('busy','ok') else verdict
+                before = await reload_fixed_project(ws, account, expected, project, actions, issue)
                 verdict = page_verdict(before)
                 if verdict != 'ok':
                     return verdict,None
@@ -738,7 +746,10 @@ async def recover(payload):
                 except (OSError,ValueError,TimeoutError):
                     before = 'binding'
                 old_draft = before == 'ok' and (Coordinator().window(p) or {}).get('state') == 'blocked_draft'
-                if before == 'unique' or (before == 'ok' and not old_draft and lifecycle.get(p,{}).get('unique_ok') != 1):
+                if before == 'busy' or (before == 'ok' and account.get('refresh_after_busy')):
+                    verdict,_ = await asyncio.wait_for(repair(account,'busy',actions,safe_only=True),
+                        timeout=min(45,max(1,deadline-asyncio.get_running_loop().time())))
+                elif before == 'unique' or (before == 'ok' and not old_draft and lifecycle.get(p,{}).get('unique_ok') != 1):
                     verdict = await asyncio.wait_for(reconcile_fixed_window(account,binding,actions),
                         timeout=min(45,max(1,deadline-asyncio.get_running_loop().time())))
                 elif (before in {'binding','project','editor','overlay','load_failed','flow_landing'} or old_draft

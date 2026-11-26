@@ -625,7 +625,7 @@ def readiness_repair_accounts(payload, checks):
     busy = set(payload.get('busy', []))
     return [a for a in payload['accounts']
             if a['repairable'] and a['profile'] not in busy and not a['review_task']
-            and checks.get(a['profile']) not in ('ok', 'busy', 'login', 'verification_required')]
+            and checks.get(a['profile']) not in ('ok', 'login', 'verification_required')]
 
 
 class Sources:
@@ -978,8 +978,9 @@ class Sources:
         projects = project_rows(state)
         coordination = state.get('coordination') or {}
         windows = {w['profile']:w for w in coordination.get('windows', [])}
-        busy = {t.get('source_profile') for t in task_rows(state, projects)
-                if t.get('status') in ('running','dispatching')}
+        active_tasks = {t['source_profile']: t['source_id'] for t in task_rows(state, projects)
+                        if t.get('source_profile') and t.get('status') in ('running','dispatching')}
+        busy = set(active_tasks)
         busy.update(w.get('profile') for w in coordination.get('windows', [])
                     if w.get('state') in ('preparing','submitting','submitted','generated','downloading'))
         payload = {'accounts': [{'profile': a['profile'], 'key': a['key'], 'email': a['email'],
@@ -1028,6 +1029,9 @@ class Sources:
                 if not isinstance(before_checks, dict):
                     raise ValueError('invalid_readiness_result')
                 recovery_payload['accounts'] = readiness_repair_accounts(payload, before_checks)
+                for account in recovery_payload['accounts']:
+                    if before_checks.get(account['profile']) == 'busy':
+                        account['refresh_after_busy'] = True
                 if prepare_project is not None and not automatic and not payload.get('operator_dispatch_paused'):
                     from live_pool import Conflict
                     for account in recovery_payload['accounts']:
@@ -1082,8 +1086,9 @@ class Sources:
             projects = project_rows(state)
             for account in payload['accounts']:
                 account['projects'] = [p['source_id'] for p in projects if p['source_profile']==account['profile']]
-            payload['busy'] = sorted({t['source_profile'] for t in task_rows(state, projects)
-                if t.get('source_profile') and t.get('status') in ('running','dispatching')} |
+            active_tasks = {t['source_profile']: t['source_id'] for t in task_rows(state, projects)
+                            if t.get('source_profile') and t.get('status') in ('running','dispatching')}
+            payload['busy'] = sorted(active_tasks.keys() |
                 {p for p,w in windows.items() if w.get('state') in ('preparing','submitting','submitted','generated','downloading')})
         result = subprocess.run([str(python),'-B',str(helper)], input=json.dumps(payload).encode(),
                                 capture_output=True, check=True, timeout=10)
@@ -1113,7 +1118,9 @@ class Sources:
                 except (ValueError, OSError, URLError):
                     pass  # A successful page recheck is independent of balance availability.
         now = time.time()
-        return {'accounts':checks,'checked_at':now,'repairs':repairs,
+        return {'accounts':checks,'checked_at':now,'repairs':repairs,'active_tasks':active_tasks,
+                'busy_rechecked': [p for p, page in checks.items() if page == 'busy' and p not in active_tasks
+                                   and before_checks.get(p) == 'busy'] if repair else [],
                 'evidence':generation_evidence(state['tasks'],windows,now),
                 'review':{p:w['task_id'] for p,w in windows.items() if w.get('state')=='result_unknown' and w.get('task_id')}}
 

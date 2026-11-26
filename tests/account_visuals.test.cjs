@@ -623,13 +623,18 @@ test('Flow cooldown shows the failed attempt even after the task succeeds on ano
   assert.doesNotMatch(unrelated, /123456789abc\.png/);
 });
 
-test('unlinked busy state cannot be described as a confirmed failure', () => {
+test('unlinked busy state is rechecked before reporting a persistent problem', () => {
   const context = vm.createContext({});
   load('flowLoginNotice', context);
   load('flowAccountReason', context);
   const reason = vm.runInContext("flowAccountReason({profile:'a'},{tasks:[]},{status:'blocked'},'busy')", context);
-  assert.equal(reason.label, '暂不可用原因');
-  assert.match(reason.text, /未查到关联/);
+  assert.equal(reason.label, '正在复查');
+  const after = vm.runInContext("flowAccountReason({profile:'a'},{tasks:[]},{busyRechecked:true},'busy')", context);
+  assert.equal(after.label, '暂不可用原因');
+  assert.match(after.text, /复查后仍无法确认/);
+  const active = vm.runInContext("flowAccountReason({profile:'a'},{tasks:[]},{activeTask:'live'},'busy')", context);
+  assert.equal(active.label, '当前占用原因');
+  assert.match(active.text, /任务 live/);
 });
 
 test('a running account is queued rather than marked failed, while real blockers remain', () => {
@@ -648,6 +653,9 @@ test('a running account is queued rather than marked failed, while real blockers
   assert.equal(vm.runInContext('accountIssues(account,snapshot).length',context),0);
   const rows=vm.runInContext("auditFlowAccounts(snapshot,{available:true,active:1,maximum:3},{accounts:{a:'busy'}},0)",context);
   assert.equal(rows[0].status,'queue');
+  context.snapshot.tasks=[];
+  const fresh=vm.runInContext("auditFlowAccounts(snapshot,{available:true,active:1,maximum:3},{accounts:{a:'busy'},active_tasks:{a:'live'}},0)",context);
+  assert.equal(fresh[0].status,'queue');
   context.flowGovernance=()=>({shared:[],rows:[{account,issues:[{title:'Google 要求验证'}]}]});
   assert.equal(vm.runInContext("auditFlowAccounts(snapshot,{available:true},{accounts:{a:'busy'}},0)[0].status",context),'blocked');
 });

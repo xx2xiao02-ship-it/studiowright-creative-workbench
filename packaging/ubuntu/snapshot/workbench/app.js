@@ -276,7 +276,11 @@ function flowAccountReason(account, snapshot, row, pageState) {
     if (rejected) return {taskId:window.task_id,label:'Flow 冷却原因',
       text:`任务 ${window.task_id} 的本账号提交被 Flow 以「异常活动」拒绝。`};
   }
-  const active = tasks.find(t => ['queued','running'].includes(t.status) && t.source_profile === account.profile);
+  const active = row?.activeTask
+    ? {source_id:row.activeTask,status:'running'}
+    : (page !== 'busy' || row?.activeTask === undefined)
+      ? tasks.find(t => ['queued','running','dispatching'].includes(t.status) && t.source_profile === account.profile)
+      : null;
   if (!active && row?.status === 'ready' && !row?.issues?.length && pageState !== 'busy') return null;
   const historical = window?.state === 'idle' && !account.flow_risk_paused && !account.flow_cooling;
   const task = active || (historical ? null : linked);
@@ -292,7 +296,9 @@ function flowAccountReason(account, snapshot, row, pageState) {
       generated:'结果已生成，正在整理',downloading:'下载结果'}[window?.stage] || (current.status === 'queued' ? '排队中' : '处理中');
     return {label:'当前占用原因',text:`任务 ${current.source_id}：${stage}；尚未收到失败回执。`};
   }
-  if (page === 'busy') return {label:'暂不可用原因',text:'后台标记页面被占用，但未查到关联的进行中任务，需核对窗口状态。'};
+  if (page === 'busy') return row?.busyRechecked
+    ? {label:'暂不可用原因',text:'复查后仍无法确认原窗口空闲，请核对 Flow 页面。'}
+    : {label:'正在复查',text:'正在更新任务和窗口状态，确认空闲后会自动刷新原页面。',showOnCard:true};
   if (!row?.review && !account.flow_risk_paused && !account.flow_cooling) {
     const needsProject = ['binding','unique','project'].includes(page)
       || (!page && row?.issues?.some(issue => issue.key === 'flow_binding'));
@@ -450,14 +456,12 @@ function accountIssues(account, snapshot = state.snapshot, geminiRow = null,
       !signIn && !(pageState === 'ok' && !account.flow_balance_fresh))
     add('flow_unknown', 'Flow 状态待核对', '目前无法确认该账号的 Flow 是否可用。', '查看账号详情并核对 Flow 状态。');
 
-  const activeFlow = (snapshot?.tasks || []).some(t => t.source_profile === account.profile &&
-    ['image','video'].includes(t.kind) && ['queued','running'].includes(t.status));
   if (signIn) add('flow_page_state', signIn.label, signIn.text, '');
   else if (pageState === 'unique')
     add('flow_page_state', '固定任务窗口待复查', '算力中心会保留已绑定的任务页，只关闭同项目确认空的副本。', '');
   else if (pageState === 'draft')
     add('flow_page_state', '固定任务窗口有草稿或附件', '算力中心会保留草稿。处理后再检查就绪。', '');
-  else if (pageState && pageState !== 'ok' && !(pageState === 'busy' && activeFlow))
+  else if (pageState && !['ok','busy'].includes(pageState))
     add('flow_page_state', '页面未就绪：' + ({overlay:'页面有弹窗待关闭', binding:'窗口绑定待核对', project:'页面停在非标准项目', unconfirmed:'页面状态待确认', busy:'页面忙', draft:'有草稿待核对', load_failed:'固定任务页加载失败'}[pageState] || pageState), '点一键就绪，算力中心会把页面带回标准项目并复查。', '使用一键就绪。');
   const windowIssue = flowWindowIssue(account.profile, snapshot);
   if (windowIssue) issues.push(windowIssue);
@@ -1312,6 +1316,11 @@ let flowReadinessObservation=null, flowReadinessReadAt=0, lastFlowReadiness=null
 function rememberFlowReadiness(pageChecks,dispatch) {
   if (!pageChecks?.accounts || !Number.isFinite(pageChecks.checked_at) || dispatch?.available!==true) return;
   if (flowReadinessObservation?.pageChecks.checked_at>pageChecks.checked_at) return;
+  const previous = flowReadinessObservation?.pageChecks.busy_rechecked || [];
+  const rechecked = new Set([...(pageChecks.busy_rechecked || []),
+    ...previous.filter(profile => Date.now() < (autoFlowRecoveryAfter.get(profile) || 0))]);
+  pageChecks={...pageChecks,busy_rechecked:[...rechecked].filter(profile =>
+    pageChecks.accounts[profile]==='busy' && !pageChecks.active_tasks?.[profile])};
   flowReadinessObservation={pageChecks,dispatch,receivedAt:performance.now()};
 }
 
@@ -1335,7 +1344,8 @@ function autoRecoverFlowPages(pageChecks) {
   const candidates = Object.entries(pageChecks?.accounts || {}).filter(([profile, value]) => {
     const account = state.snapshot?.real_accounts?.items?.find(a => a.profile === profile);
     return Date.now() >= (autoFlowRecoveryAfter.get(profile) || 0) &&
-      ['binding','project','flow_landing','editor','overlay','unconfirmed','unique','load_failed'].includes(value) && !pageChecks?.review?.[profile] &&
+      (['binding','project','flow_landing','editor','overlay','unconfirmed','unique','load_failed'].includes(value)
+        || (value==='busy' && !pageChecks.active_tasks?.[profile])) && !pageChecks?.review?.[profile] &&
       account?.flow_login === 'verified' && account?.flow_risk_paused !== true && account?.flow_cooling !== true;
   });
   if (!candidates.length) return;
@@ -1343,7 +1353,8 @@ function autoRecoverFlowPages(pageChecks) {
   autoFlowRecovery = postJson('/api/flow-readiness/auto', {}).then(result => {
     if (!result || !result.accounts) return;
     for (const [profile] of candidates) {
-      if (result.accounts[profile] !== 'busy') autoFlowRecoveryAfter.set(profile, Date.now() + 300000);
+      if (result.accounts[profile] !== 'busy' || result.busy_rechecked?.includes(profile))
+        autoFlowRecoveryAfter.set(profile, Date.now() + 300000);
     }
     rememberFlowReadiness(result, flowReadinessObservation?.dispatch);
     if (state.view === 'accounts') renderAccounts();
@@ -1600,15 +1611,18 @@ function auditFlowAccounts(snapshot, dispatch, pageChecks, probeStartedAt) {
     }
     const busy=page==='busy' || ['preparing','submitting','submitted','generated','downloading'].includes(windowStates.get(profile));
     const proven=page==='ok' || evidence==='generating' || (evidence==='recent_success' && !busy && (page==='unconfirmed'||!page));
-    const active=(snapshot.tasks || []).some(t=>t.source_profile===profile && ['image','video'].includes(t.kind) && ['queued','running'].includes(t.status));
-    const status=blocked.length || review ? 'blocked' : page==='busy' && active && dispatch?.available===true ? 'queue' : proven && dispatch?.available===true ? 'ready' : 'unknown';
+    const activeTask=pageChecks?.active_tasks ? pageChecks.active_tasks[profile] || null : undefined;
+    const active=activeTask===undefined ? (snapshot.tasks || []).some(t=>t.source_profile===profile &&
+      ['image','video'].includes(t.kind) && ['queued','running','dispatching'].includes(t.status)) : !!activeTask;
+    const busyRechecked=page==='busy' && !active && pageChecks?.busy_rechecked?.includes(profile);
+    const status=blocked.length || review || busyRechecked ? 'blocked' : page==='busy' && active && dispatch?.available===true ? 'queue' : proven && dispatch?.available===true ? 'ready' : 'unknown';
     const history=(repair?.actions || []).map(action=>flowRecoveryLabels[action]).filter(Boolean);
     let note=status==='queue' ? '已有任务正在处理，新任务等待账号空闲。' : status==='ready' ? (evidence==='generating' ? 'Flow 已接收，正在生成。' : evidence==='recent_success' ? '最近 10 分钟已生成产物。' : '输入框和发送入口已核对。') :
-      status==='unknown' ? (busy ? '任务处理中，尚未确认 Flow 已接收。' : '实际页面或派发服务尚未核对通过。') : '';
+      status==='unknown' ? (busy ? '正在复查任务和窗口状态。' : '实际页面或派发服务尚未核对通过。') : '';
     if (status==='ready' && (dispatch.paused || busy || flowOccupiedSlots(dispatch)>=dispatch.maximum)) note+=' 新任务可接收，等调度放行或空出名额。';
     if (history.length) note+=` 本轮处理：${history.join('、')}。${status==='ready' ? '复查通过。' : '复查未通过。'}`;
     if (repair?.note) note+=` ${repair.note}`;
-    return {account,status,page,evidence,review,issues:blocked,note};
+    return {account,status,page,evidence,review,issues:blocked,note,activeTask,busyRechecked};
   });
 }
 

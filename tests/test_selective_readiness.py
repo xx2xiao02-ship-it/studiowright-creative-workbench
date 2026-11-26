@@ -79,7 +79,7 @@ class SelectiveReadiness(unittest.TestCase):
         payload=dict(accounts=accounts,busy=['busy'])
         checks=dict(healthy='ok',paused='binding',busy='binding',pagebusy='busy',review='draft',broken='binding',
                     google_check='verification_required',login='login')
-        self.assertEqual([a['profile'] for a in readiness_repair_accounts(payload,checks)],['broken'])
+        self.assertEqual([a['profile'] for a in readiness_repair_accounts(payload,checks)],['pagebusy','broken'])
         self.assertEqual(len(payload['accounts']),8)
 
     def test_auto_cleanup_refreshes_stale_credits_only_for_repaired_idle_account(self):
