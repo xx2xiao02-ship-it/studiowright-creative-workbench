@@ -492,6 +492,8 @@ class Studio:
         result = json.loads(job["result"]) if job and job["result"] else {}
         params = json.loads(job["params"]) if job and job["params"] else {}
         stage, media = result.get("stage"), result.get("media_ids", [])
+        if site == FLOW_ROOT and isinstance(exc, UnusualActivity) and exc.reply_diagnostics is not None:
+            result["provider_rejection"] = exc.reply_diagnostics
         try:
             project_id = job["project_id"] if job else None
             shot = await self._capture_failure_page(job_id, site, project_id, page)
@@ -584,6 +586,8 @@ class Studio:
         previous = result.get("stage")
         if previous not in stages or stages.index(stage) > stages.index(previous):
             result["stage"] = stage
+            if stage == "submitting":
+                result["submit_checkpoint_at"] = time.time()
         result["media_ids"] = list(dict.fromkeys([*result.get("media_ids", []), *media_ids]))
         self.store.update_job(job_id, result=result)
 

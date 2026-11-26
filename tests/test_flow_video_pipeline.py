@@ -350,6 +350,68 @@ class FlowVideoPipeline(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual([(clip.media_id, clip.url) for clip in clips], [(media, None)])
 
+    async def test_flow_rejection_records_http_and_service_codes_in_the_task(self):
+        with flow_modules() as runtime, tempfile.TemporaryDirectory() as directory:
+            from studiowright.flow import page as flow_page
+            from studiowright.studio import Studio
+
+            cases = (
+                ('image', flow_page.IMAGE_RPC, 200, 7, 'PUBLIC_ERROR_UNUSUAL_ACTIVITY'),
+                ('video', flow_page.VIDEO_SUBMIT_RPCS[0], 429, 8, 'PUBLIC_ERROR_UNUSUAL_ACTIVITY_TOO_MUCH_TRAFFIC'),
+            )
+            for kind, rpc, status, code, reason in cases:
+                with self.subTest(kind=kind):
+                    project = str(uuid.uuid4())
+                    flow = flow_page.FlowPage(SimpleNamespace(url=flow_page.FLOW_ROOT + 'project/' + project),
+                                              project, None)
+                    flow.grid_media_ids = AsyncMock(return_value=set())
+
+                    async def submit(_prompt, checkpoint):
+                        checkpoint()
+
+                    flow._type_and_submit = submit
+                    watch = AsyncMock(verified_submit=Mock(return_value=True), mark_submit=Mock())
+                    watch.__aenter__.return_value = watch
+                    body = json.dumps([['wrb.fr', rpc, None, None, None, [code, [reason, 'OTHER_DETAIL']]]])
+                    watch.bodies = [(rpc, status, body)]
+                    source = {'id': 'source-job', 'profile': 'fixture', 'project_id': project, 'kind': kind,
+                              'params': '{"count":1}', 'result': '{"stage":"preparing"}'}
+                    studio = Studio.__new__(Studio)
+                    studio.governor = Mock()
+                    studio._capture_failure_page = AsyncMock(return_value=None)
+
+                    def update_job(_, *, result, **outcome):
+                        source.update(outcome, result=json.dumps(result))
+
+                    studio.store = SimpleNamespace(job=lambda _: source, update_job=update_job)
+
+                    async def run(*_):
+                        generate = flow.generate_images if kind == 'image' else flow.generate_video
+                        try:
+                            await generate('fixture', on_submit=lambda: studio._progress('source-job', 'submitting', []))
+                        except flow_page.UnusualActivity as exc:
+                            await studio._fail('source-job', exc, flow_page.FLOW_ROOT)
+                            raise
+
+                    adapter = SimpleNamespace(discover=lambda: ['fixture'], source_jobs=lambda _: [],
+                                              source_jobs_for_task=lambda *_: [source], run=run)
+                    console = runtime.Console(Path(directory) / kind, adapter, test=True)
+                    console.store.update_account('fixture', 'fixture@example.test', 'verified')
+                    console.store.project('fixture', project, 'FLOW+fixture')
+                    task = console.store.create_task('fixture', project, kind, {'count': 1},
+                                                     str(uuid.uuid4()), auto_retry=False)
+                    with patch.object(flow_page, 'ReplyWatch', return_value=watch), \
+                            patch('task_coordinator.Coordinator', return_value=SimpleNamespace(events=lambda _: [])):
+                        await console.execute(console.store.claim(set()))
+                    completed = console.store.task(task['id'])
+                    self.assertEqual(completed['status'], 'failed')
+                    receipt, = completed['result']['source_jobs']
+                    rejection = receipt['provider_rejection']
+                    self.assertEqual(rejection, {'http_status': status, 'flow_code': code, 'reason': reason,
+                                                 'observed_at': rejection['observed_at']})
+                    self.assertLessEqual(receipt['submit_checkpoint_at'], rejection['observed_at'])
+                    studio.governor.report_unusual_activity.assert_called_once()
+
     async def test_project_grid_does_not_choose_a_different_videos_poster(self):
         with flow_modules():
             from studiowright.flow import page as flow_page

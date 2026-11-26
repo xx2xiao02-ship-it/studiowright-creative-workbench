@@ -213,16 +213,19 @@ class Console:
                     r = dict(r)
                     if linked or r["id"] not in before:
                         raw = json.loads(r["result"]) if r.get("result") else {}
-                        provenance.append(
-                            {
-                                "job_id": r["id"],
-                                "project_id": r["project_id"],
-                                "status": r["status"],
-                                "stage": raw.get("stage"),
-                                "media_ids": raw.get("media_ids", []),
-                                "files": raw.get("files", []),
-                            }
-                        )
+                        receipt = {
+                            "job_id": r["id"],
+                            "project_id": r["project_id"],
+                            "status": r["status"],
+                            "stage": raw.get("stage"),
+                            "media_ids": raw.get("media_ids", []),
+                            "files": raw.get("files", []),
+                        }
+                        if linked and isinstance(raw.get("provider_rejection"), dict):
+                            receipt["provider_rejection"] = raw["provider_rejection"]
+                            if isinstance(raw.get("submit_checkpoint_at"), (int, float)):
+                                receipt["submit_checkpoint_at"] = raw["submit_checkpoint_at"]
+                        provenance.append(receipt)
                 # A source record is admissible only when exactly correlated with
                 # this console task and still proves no accepted/generated media.
                 if len(linked) == 1:
