@@ -240,7 +240,22 @@ function flowLoginNotice(page) {
   return null;
 }
 
-function flowAccountReason(account, snapshot, row, pageState) {
+function flowAccountActivity(account, snapshot) {
+  const tasks = snapshot?.tasks || [];
+  const window = snapshot?.flow_coordination?.windows?.find(row => row.profile === account.profile);
+  const stages = {preparing:'准备输入', submitting:'提交中', submitted:'生成中', generated:'整理结果', downloading:'下载中'};
+  const isRunning = task => task.source_profile === account.profile && ['image','video'].includes(task.kind) &&
+    ['running','dispatching'].includes(task.status);
+  if (window?.task_id && Object.hasOwn(stages, window.state)) {
+    const bound = tasks.find(task => task.source_id === window.task_id);
+    if (!bound || isRunning(bound))
+      return {taskId:window.task_id, stage:stages[window.state]};
+  }
+  const active = tasks.find(isRunning);
+  return active ? {taskId:active.source_id, stage:active.status === 'dispatching' ? '派发中' : '处理中'} : null;
+}
+
+function flowAccountReason(account, snapshot, row, pageState, activity) {
   if (account.flow_page_incident) {
     const phase = account.flow_page_incident.phase === 'login' ? '核对登录' : '浏览 Flow 页面';
     return {label:'Flow 停派原因', text:`${phase}时检测到异常活动提示，等待人工核查。`,
@@ -265,7 +280,7 @@ function flowAccountReason(account, snapshot, row, pageState) {
     });
     return {label:'Flow 派发自检未通过', text:[...new Set(reasons)].join('；'), noScreenshot:true};
   }
-  if (row?.recovering) return {label:'刷新复查中',text:'正在刷新 Flow 任务页，随后复查页面和积分。'};
+  if (row?.recovering && !activity) return {label:'刷新复查中',text:'正在刷新 Flow 任务页，随后复查页面和积分。'};
   const window = (snapshot?.flow_coordination?.windows || []).find(w => w.profile === account.profile);
   const tasks = (snapshot?.tasks || []).filter(t => ['image','video'].includes(t.kind) &&
     (t.source_profile === account.profile || (t.retry?.attempts || []).some(a => a.profile === account.profile)));
@@ -278,25 +293,15 @@ function flowAccountReason(account, snapshot, row, pageState) {
     if (rejected) return {taskId:window.task_id,label:'Flow 冷却原因',
       text:`任务 ${window.task_id} 的本账号提交被 Flow 以「异常活动」拒绝。`};
   }
-  const active = row?.activeTask
-    ? {source_id:row.activeTask,status:'running'}
-    : (page !== 'busy' || row?.activeTask === undefined)
-      ? tasks.find(t => ['queued','running','dispatching'].includes(t.status) && t.source_profile === account.profile)
-      : null;
-  if (!active && row?.status === 'ready' && !row?.issues?.length && pageState !== 'busy') return null;
+  if (activity) return null;
+  if (row?.status === 'ready' && !row?.issues?.length && pageState !== 'busy') return null;
   const historical = window?.state === 'idle' && !account.flow_risk_paused && !account.flow_cooling;
-  const task = active || (historical ? null : linked);
+  const task = historical ? null : linked;
   const attempts = (task?.retry?.attempts || []).filter(a => !a.profile || a.profile === account.profile);
   const latest = attempts.at(-1);
   if (task && (['failed','interrupted'].includes(task.status) || latest?.status === 'failed') &&
       !['active','pending_switch'].includes(task.retry?.state)) {
     return {taskId:task.source_id};
-  }
-  if (active || (task && ['queued','running'].includes(task.status))) {
-    const current = active || task;
-    const stage = {preparing:'准备输入',submitting:'提交中，等待服务方回执',submitted:'等待生成结果',
-      generated:'结果已生成，正在整理',downloading:'下载结果'}[window?.stage] || (current.status === 'queued' ? '排队中' : '处理中');
-    return {label:'当前占用原因',text:`任务 ${current.source_id}：${stage}；尚未收到失败回执。`};
   }
   if (page === 'busy') return row?.busyRechecked
     ? {label:'暂不可用原因',text:'复查后仍无法确认原窗口空闲，请核对 Flow 页面。'}
@@ -2637,12 +2642,15 @@ function renderAccounts() {
     const flowIssues = flowRow?.issues || [];
     const geminiIssues = issues.filter(issue => !issue.key.startsWith('flow_') && issue.key !== 'quota_stale' && issue.key !== 'gemini_confirmed_verification');
     const windowIssue = flowWindowIssue(item.profile, state.snapshot);
-    const flowFallback = (!flowReady && !flowRow?.recovering && !cooling && !flowPaused && !windowIssue && !flowIssues.length)
+    const flowActivity = flow && state.snapshotFresh ? flowAccountActivity(item, state.snapshot) : null;
+    const flowProgress = flowActivity ? `<div class="account-flow-progress" role="progressbar" aria-label="Flow · ${esc(flowActivity.stage)}" title="任务 ${esc(flowActivity.taskId)} · ${esc(flowActivity.stage)}"></div>` : '';
+    const flowFallback = (!flowActivity && !flowReady && !flowRow?.recovering && !cooling && !flowPaused && !windowIssue && !flowIssues.length)
       ? ({blocked:'账号处于不可派发状态，等待就绪核对通过。', unknown:'账号状态尚未完成核对，等待下次检查。', checking:'正在验活，请稍候。'}[flowRow?.status] || '账号状态待核对，等待下次检查。') : '';
     const geminiFallback = (!item.gemini_removed && !geminiReady && !geminiIssues.length && !(geminiRow?.checking))
       ? ({blocked:'Gemini 处于不可派发状态，等待就绪核对通过。', unknown:'Gemini 状态尚未完成核对，等待下次检查。'}[geminiRow?.status] || 'Gemini 状态待核对，等待下次检查。') : '';
     // Derive each service's presentation from its own recorded state only.
-    const flowNeedsAttention = flowRow?.status==='blocked' && !cooling && !flowOperatorPaused;
+    const flowNeedsAttention = flowRow?.status==='blocked' && !cooling && !flowOperatorPaused &&
+      (!flowActivity || flowPaused || signIn || windowIssue || item.flow_preflight_reasons?.length);
     const geminiNeedsAttention = !item.gemini_removed && geminiCard.attention;
     const needsAttention = flow ? flowNeedsAttention : geminiNeedsAttention;
     const geminiLastCheck = item.gemini_enabled === false ? '已暂停' : item.gemini === 'verified' ? '上次已核对' : '待核对';
@@ -2650,13 +2658,16 @@ function renderAccounts() {
     const cardState = (flowOperatorPaused ? ' is-flow-operator-paused'
       : flow && flowPaused ? ' is-flow-paused' : flow && cooling ? ' is-flow-cooling' : '') + (needsAttention ? ' is-account-issue' : '');
     const flowStatusText = pageIncident ? '已停派' : item.flow_operator_paused ? '手动暂停' : ['flow_landing','login','verification_required'].includes(flowRow?.page) ? '暂不派发'
-      : item.flow_preflight_reasons?.length && !flowPaused && !cooling ? '自检未通过' : readinessBadge(flowRow);
+      : item.flow_preflight_reasons?.length && !flowPaused && !cooling ? '自检未通过'
+      : flowActivity && !flowPaused && !cooling ? flowActivity.stage : readinessBadge(flowRow);
+    const flowHealthClass = flowPaused ? 'is-paused' : cooling ? 'is-cooling' : flowStatusText === flowActivity?.stage
+      ? 'is-running' : flowRow?.status !== 'ready' ? 'is-unknown' : '';
     const cooldownSeconds = typeof item.flow_cooldown_seconds === 'number' && Number.isFinite(item.flow_cooldown_seconds) && item.flow_cooldown_seconds > 0 ? item.flow_cooldown_seconds : null;
     const cooldownEnd = cooldownSeconds === null ? null : (state.snapshotReceivedAt || Date.now()) + cooldownSeconds * 1000;
     const coolingInfo = cooling ? (cooldownSeconds === null ? '本地冷却中，剩余时间待核对。' : '圆圈内为上次读取后估算的本地冷却剩余时间；到时后请刷新核对，服务方是否恢复以实际状态为准。') : '';
     const accountKey = esc(item.key.slice("flow-account-".length));
     const flowReason = flowAccountReason(item, state.snapshot, {...flowRow,recovering:autoFlowRecoveryProfiles.has(item.profile)},
-      flowReadinessObservation?.pageChecks?.accounts?.[item.profile]);
+      flowReadinessObservation?.pageChecks?.accounts?.[item.profile], flowActivity);
     const accountProjects = (state.snapshot?.projects || []).filter(p => p.source_profile === item.profile);
     const selectedRetryProject = retryProjectDrafts.get(accountKey) ?? state.snapshot?.retry_projects?.[item.profile] ?? '';
     const ownFlow = flowTasks.filter(t => t.source_profile === item.profile);
@@ -2692,8 +2703,8 @@ function renderAccounts() {
     ]).join('');
     const markup = `<article class="account-card${cardState}"${flow ? ` data-flow-account-key="${accountKey}"` : ` draggable="true" data-drag-key="${esc(quotaKey)}"`}>
       <div class="account-card-heading">${accountAvatarMarkup(identity, avatarModels)}<div class="account-identity"><h3 title="${esc(identity)}">${esc(identity)}</h3><div class="account-card-meta">${alias && alias.toLowerCase() !== identity.toLowerCase() ? `<span class="account-alias">${esc(alias)}</span>` : ''}${flow ? `<span class="account-login ${signIn ? 'is-login-required' : item.flow_login === 'verified' ? 'is-ready' : ''}">${esc(login)}</span>` : ''}</div></div>
-        <div class="account-detail-anchor"><details class="account-details"><summary aria-label="查看 ${esc(identity)} 的详细状态" aria-controls="account-detail-${accountKey}">详情</summary></details><div id="account-detail-${accountKey}" class="account-detail-popup"><strong>账号状态详情</strong>${flow ? `<p>Flow：${esc(flowStatusText)} · ${esc(freshness + observed)}。${hasBalance ? '剩余 ' + esc(balance) + ' 积分。' : ''}未提供积分总额度。</p>${coolingInfo ? `<p>${esc(coolingInfo)}</p>` : ''}<p>Flow · ${esc(flowPerformance)}</p>` : `${officialDetails(official)}<p>Gemini · ${esc(gemPerformance)}</p>`}${issues.length ? `<div class="account-detail-issues"><strong>状态说明</strong>${issues.map(issue => `<p><b>${esc(issue.title)}</b><br>${esc(issue.impact)} ${esc(issue.action)}</p>`).join('')}</div>` : ''}</div></div></div>
-      <div class="account-services account-services-single">${flow ? `<div class="account-service account-service-flow${flowOperatorPaused ? ' is-service-operator-paused' : ''}${flowNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc(('Flow：' + flowStatusText))}" title="${esc(('Flow：' + flowStatusText))}"><div class="account-service-heading"><span>Flow</span><strong class="account-health ${flowPaused ? 'is-paused' : cooling ? 'is-cooling' : flowRow?.status!=='ready' ? 'is-unknown' : ''}">${esc(flowStatusText)}</strong></div><div class="account-flow-value"><div title="${esc(flowBalanceTitle)}"><strong>${esc(balance)}</strong><small class="account-quota-reset">下次积分到账 ${esc(flowNextCredit || '待官方更新')}${flowNextCredit && !item.flow_balance_fresh ? '（上次读取）' : ''}</small></div>${cooling ? `<div class="account-cooldown" data-risk-paused="${flowPaused}"${cooldownEnd !== null ? '' : ' aria-label="冷却中，剩余时间待核对"'}><span class="account-cooldown-time">—</span><span class="account-cooldown-label">冷却中</span></div>` : ''}</div></div>` : `<div class="account-service account-service-gemini${geminiNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}" title="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}"><div class="account-service-heading"><span>Gemini</span><strong class="account-health${geminiReady && !geminiNeedsAttention ? '' : ' is-unknown'}">${esc(geminiStatusText)}</strong></div>${item.gemini_removed ? '' : `<div data-account-quota="${accountKey}">${quotaView.html}</div>`}</div>`}</div>
+        <div class="account-detail-anchor"><details class="account-details"><summary aria-label="查看 ${esc(identity)} 的详细状态" aria-controls="account-detail-${accountKey}">详情</summary></details><div id="account-detail-${accountKey}" class="account-detail-popup"><strong>账号状态详情</strong>${flow ? `<p>Flow：${esc(flowStatusText)} · ${esc(freshness + observed)}。${hasBalance ? '剩余 ' + esc(balance) + ' 积分。' : ''}未提供积分总额度。</p>${coolingInfo ? `<p>${esc(coolingInfo)}</p>` : ''}${flowActivity ? `<p>当前任务 ${esc(flowActivity.taskId)} · ${esc(flowActivity.stage)}</p>` : ''}<p>Flow · ${esc(flowPerformance)}</p>` : `${officialDetails(official)}<p>Gemini · ${esc(gemPerformance)}</p>`}${issues.length ? `<div class="account-detail-issues"><strong>状态说明</strong>${issues.map(issue => `<p><b>${esc(issue.title)}</b><br>${esc(issue.impact)} ${esc(issue.action)}</p>`).join('')}</div>` : ''}</div></div></div>
+      <div class="account-services account-services-single">${flow ? `<div class="account-service account-service-flow${flowOperatorPaused ? ' is-service-operator-paused' : ''}${flowNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc(('Flow：' + flowStatusText))}" title="${esc(('Flow：' + flowStatusText))}"><div class="account-service-heading"><span>Flow</span>${flowProgress}<strong class="account-health ${flowHealthClass}">${esc(flowStatusText)}</strong></div><div class="account-flow-value"><div title="${esc(flowBalanceTitle)}"><strong>${esc(balance)}</strong><small class="account-quota-reset">下次积分到账 ${esc(flowNextCredit || '待官方更新')}${flowNextCredit && !item.flow_balance_fresh ? '（上次读取）' : ''}</small></div>${cooling ? `<div class="account-cooldown" data-risk-paused="${flowPaused}"${cooldownEnd !== null ? '' : ' aria-label="冷却中，剩余时间待核对"'}><span class="account-cooldown-time">—</span><span class="account-cooldown-label">冷却中</span></div>` : ''}</div></div>` : `<div class="account-service account-service-gemini${geminiNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}" title="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}"><div class="account-service-heading"><span>Gemini</span><strong class="account-health${geminiReady && !geminiNeedsAttention ? '' : ' is-unknown'}">${esc(geminiStatusText)}</strong></div>${item.gemini_removed ? '' : `<div data-account-quota="${accountKey}">${quotaView.html}</div>`}</div>`}</div>
       ${flow ? flowNetworkSlot(item.exit_info) : ''}
       ${flow && flowReason?.showOnCard ? flowNotice : ''}
       ${!flow && geminiRow?.checking ? `<p class="account-check-status">Gemini · ${esc(geminiRow.note || '正在检查云端响应')}</p>` : ''}

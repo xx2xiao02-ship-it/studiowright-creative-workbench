@@ -111,6 +111,14 @@ progress.account-quota-track { appearance: none; }
 .account-service-heading strong.is-cooling { padding: 3px 7px; border-radius: 6px; background: #285d82; color: #fff; }
 .account-service-heading strong.is-paused { padding: 3px 7px; border-radius: 6px; background: #48545e; color: #fff; }
 .account-service-heading strong.is-unknown { background: #f2eadf; color: #765423; }
+.account-service-heading strong.is-running { flex: none; color: #21635e; }
+.account-flow-progress { position: relative; flex: 1; min-width: 28px; height: 4px; margin-inline: 5px; overflow: hidden; border-radius: 6px; background: #d9e7e0; }
+.account-flow-progress::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 40%; border-radius: inherit; background: #347f76; animation: account-flow-progress 1.3s ease-in-out infinite alternate; }
+@keyframes account-flow-progress { from { transform: translateX(0); } to { transform: translateX(150%); } }
+@media (prefers-reduced-motion: reduce) {
+  .account-flow-progress { background: repeating-linear-gradient(120deg, #347f76 0 4px, #d9e7e0 4px 9px); }
+  .account-flow-progress::before { display: none; }
+}
 
 /* Emphasize only the service whose recorded status requires attention. */
 .account-service.is-service-issue { border-color: #e1b8b0; background: #fff6f4; }

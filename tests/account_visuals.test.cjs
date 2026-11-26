@@ -581,17 +581,34 @@ test('dragging in Gemini keeps the shared order entries omitted by the account t
   assert.deepEqual(Array.from(context.accountOrderOverride), ['b','hidden','a']);
 });
 
-test('account reason identifies running work without inventing a failure', () => {
+test('Flow account progress follows the active task and its coordinator stage', () => {
   const context = vm.createContext({});
   load('flowLoginNotice', context);
+  load('flowAccountActivity', context);
   load('flowAccountReason', context);
   context.account = {profile:'a'};
-  context.snapshot = {flow_coordination:{windows:[{profile:'a',task_id:'current',stage:'preparing'}]},
-    tasks:[{source_id:'current',source_profile:'a',kind:'image',status:'running',retry:{state:'active',attempts:[]}}]};
-  const reason = vm.runInContext("flowAccountReason(account,snapshot,{status:'blocked'},'busy')", context);
-  assert.equal(reason.label, '当前占用原因');
-  assert.match(reason.text, /current.*准备输入/);
-  assert.match(reason.text, /尚未收到失败回执/);
+  const window = {profile:'a',task_id:'current',state:'preparing'};
+  const task = {source_id:'current',source_profile:'a',kind:'image',status:'running'};
+  context.snapshot = {flow_coordination:{windows:[window]},tasks:[task]};
+  const activity = () => vm.runInContext('flowAccountActivity(account,snapshot)', context);
+  assert.equal(activity().taskId, 'current');
+  assert.equal(activity().stage, '准备输入');
+  const reason = vm.runInContext(
+    "flowAccountReason(account,snapshot,{status:'blocked'},'busy',flowAccountActivity(account,snapshot))", context);
+  assert.equal(reason, null);
+  window.state = 'submitted';
+  assert.equal(activity().stage, '生成中');
+  window.state = 'downloading';
+  assert.equal(activity().stage, '下载中');
+  task.status = 'succeeded';
+  assert.equal(activity(), null);
+  window.state = 'idle';
+  context.snapshot.tasks = [{...task, source_id:'next', status:'queued'}];
+  assert.equal(activity(), null);
+  context.snapshot.tasks[0].status = 'dispatching';
+  assert.equal(activity().stage, '派发中');
+  context.snapshot.tasks[0].source_profile = 'b';
+  assert.equal(activity(), null);
 });
 
 test('a manually paused Flow account has its own message, separate from a risk review', () => {
@@ -706,9 +723,8 @@ test('unlinked busy state is rechecked before reporting a persistent problem', (
   const after = vm.runInContext("flowAccountReason({profile:'a'},{tasks:[]},{busyRechecked:true},'busy')", context);
   assert.equal(after.label, '暂不可用原因');
   assert.match(after.text, /复查后仍无法确认/);
-  const active = vm.runInContext("flowAccountReason({profile:'a'},{tasks:[]},{activeTask:'live'},'busy')", context);
-  assert.equal(active.label, '当前占用原因');
-  assert.match(active.text, /任务 live/);
+  const stale = vm.runInContext("flowAccountReason({profile:'a'},{tasks:[]},{activeTask:'old'},'busy')", context);
+  assert.equal(stale.label, '正在复查');
 });
 
 test('an idle Flow draft is shown as a refreshable state with the result of a completed refresh', () => {
