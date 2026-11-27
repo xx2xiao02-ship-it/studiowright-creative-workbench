@@ -144,18 +144,22 @@ async def _verify_prompt(driver, page, composer, target, prompt):
         raise InputNotSubmitted('window_focus_lost')
 
 
-FLOW_PREFIX_TIMEOUT = 4.0
-FLOW_PASTE_TIMEOUT = 10.0
-FLOW_VERIFY_TIMEOUT = 4.0
+FLOW_PROMPT_TIMEOUT = 4.0
 
 
 @asynccontextmanager
-async def _flow_prompt_step(step, seconds, record):
-    started = time.monotonic()
-    record('flow_prompt_step_started', step=step, seconds=seconds)
+async def _flow_prompt_step(step, deadline, record):
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    record('flow_prompt_step_started', step=step,
+           remaining_seconds=round(max(0, deadline - started), 3))
     try:
-        async with asyncio.timeout(seconds):
+        async with asyncio.timeout_at(deadline):
+            if loop.time() >= deadline:
+                raise TimeoutError
             yield
+            if loop.time() >= deadline:
+                raise TimeoutError
     except InputNotSubmitted as exc:
         record('flow_prompt_step_failed', step=step, reason=str(exc))
         raise
@@ -167,7 +171,7 @@ async def _flow_prompt_step(step, seconds, record):
         raise InputNotSubmitted(reason) from exc
     else:
         record('flow_prompt_step_completed', step=step,
-               elapsed_ms=round((time.monotonic() - started) * 1000))
+               elapsed_ms=round((loop.time() - started) * 1000))
 
 
 async def _prepare_flow_prefix(driver, page, composer, target, prompt, record):
@@ -197,12 +201,13 @@ async def _prepare_flow_prefix(driver, page, composer, target, prompt, record):
             raise InputNotSubmitted('flow_prefix_deletion_incomplete')
 
 async def enter_hybrid_prompt(driver, page, composer, target, prompt, record):
-    async with _flow_prompt_step('prefix', FLOW_PREFIX_TIMEOUT, record):
+    deadline = asyncio.get_running_loop().time() + FLOW_PROMPT_TIMEOUT
+    async with _flow_prompt_step('prefix', deadline, record):
         await _prepare_flow_prefix(driver, page, composer, target, prompt, record)
-    async with _flow_prompt_step('paste', FLOW_PASTE_TIMEOUT, record):
+    async with _flow_prompt_step('paste', deadline, record):
         record('clipboard_paste_started', characters=len(prompt))
         await driver.copy_prompt_and_paste(page, composer, target, prompt)
-    async with _flow_prompt_step('verify', FLOW_VERIFY_TIMEOUT, record):
+    async with _flow_prompt_step('verify', deadline, record):
         await _verify_prompt(driver, page, composer, target, prompt)
 
 
