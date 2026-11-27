@@ -457,6 +457,41 @@ if record.get("task_id"):
 
 错误通常返回 `{"error":"原因"}`。`401` 检查密钥，`400` 检查请求参数，`404` 核对路径或编号，`409` 先查询原任务。`GET /health` 检查 18922 API 是否可访问，无需密钥。
 
+## 现成素材查重入库
+
+**`POST /api/library/import?filename=原文件名&sha256=校验值`** 使用同一工作台 Bearer 密钥。请求正文传一个文件的原始字节，使用 `application/octet-stream` 和文件大小 `Content-Length`。文件名需 URL 编码并包含扩展名。`sha256` 可省略，提供时服务会核对实际收到的内容。
+
+支持 JPG、JPEG、PNG、WebP、GIF、BMP、AVIF、MP4、MOV、WebM、WAV 和 M4A。单个文件上限 1 GiB，超限返回 `413`。
+
+- `201` 表示新增素材，`200` 并带有 `deduplicated: true` 表示复用已有素材。回复包含 `asset_id`、`media_type` 和下载地址 `path`。
+- `asset_id` 是文件内容的 SHA-256。重复上传同一内容会返回相同编号。改名再上传会保留新原名供搜索，素材库仍只有一份内容。
+- 上传前可用 `GET /api/library/{SHA-256}` 查重。若需要确认原文件也能取回，可对返回的 `url` 发起带 `Range: bytes=0-0` 的 GET。
+
+```python
+import hashlib
+from urllib.parse import urlencode
+from urllib.error import HTTPError
+
+file = Path("待入库素材.mp4")
+with file.open("rb") as stream:
+    sha = hashlib.file_digest(stream, "sha256").hexdigest()
+
+try:
+    existing = call("/api/library/" + sha)
+except HTTPError as error:
+    if error.code != 404:
+        raise
+    query = urlencode({"filename": file.name, "sha256": sha})
+    headers = {**AUTH, "Content-Type": "application/octet-stream",
+               "Content-Length": str(file.stat().st_size)}
+    with file.open("rb") as stream:
+        request = Request(BASE + "/api/library/import?" + query, data=stream, headers=headers)
+        with HTTP.open(request, timeout=190) as response:
+            print(json.load(response))
+else:
+    print({"asset_id": existing["id"], "deduplicated": True, "path": existing["url"]})
+```
+
 ## 音乐生成与音频
 
 音乐新任务使用账号页优先顺序，提交生成前核对额度，并跳过无额度或不可用的账号。未出现在账号页的音乐账号按登记顺序补在后面。上游接收任务后继续查询原单。

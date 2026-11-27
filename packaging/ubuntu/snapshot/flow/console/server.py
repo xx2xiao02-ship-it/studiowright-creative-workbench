@@ -29,12 +29,13 @@ from flow_proxy_guard import exit_bindings, mapped_ports, release_removed_exits,
 from flow_references import REFERENCE_FIELDS, ReferenceStore, task_reference_ids
 from web_auth import WebAuth
 from login_sessions import ImportRestoredOnCancel, Vault, normalize_bundle
-from material_library import Library
+from material_library import ARCHIVE_MAX_BYTES, Library
 from material_tags import SEARCH_LABELS
 from preflight import pilot_dispatch_reasons
 from remote_login import RemoteLogins
 
 HERE = Path(__file__).resolve().parent
+LIBRARY_IMPORT_PATH = "/api/library/import"
 PROFILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 KINDS = {"sync", "login", "media", "doctor", "quote", "image", "video"}
 TERMINAL_INPUT_STOPS = frozenset((
@@ -1247,6 +1248,73 @@ def create_app(root, adapter, test=False):
         item = await asyncio.to_thread(c.library.get, request.path_params["ident"])
         return JSONResponse(item or {"error": "素材不存在。"}, status_code=200 if item else 404)
 
+    async def library_import(request):
+        import hashlib
+        import tempfile
+        from urllib.parse import parse_qsl
+
+        import anyio
+        from PIL import Image, UnidentifiedImageError
+        from starlette.requests import ClientDisconnect
+        from material_import import FORMATS
+
+        length = request.headers.getlist("content-length")
+        if (len(length) != 1 or not re.fullmatch(r"[0-9]{1,10}", length[0])
+                or int(length[0]) == 0 or request.headers.get("transfer-encoding")):
+            return JSONResponse({"error": "请提交一个非空文件并提供文件大小。"}, status_code=400)
+        size = int(length[0])
+        if size > ARCHIVE_MAX_BYTES:
+            return JSONResponse({"error": "单个素材超出 1 GiB。"}, status_code=413)
+        try:
+            if len(request.url.query) > 3000:
+                raise ValueError("素材上传参数过长。")
+            pairs = parse_qsl(request.url.query, keep_blank_values=True, max_num_fields=2,
+                              strict_parsing=True, errors="strict")
+            fields = dict(pairs)
+            if len(fields) != len(pairs) or set(fields) - {"filename", "sha256"}:
+                raise ValueError("请使用 filename 和可选的 sha256 参数。")
+            name = fields.get("filename", "")
+            if (not name.strip() or len(name.encode("utf-8")) > 255
+                    or any(char in "/\\" or ord(char) < 32 or ord(char) == 127 for char in name)):
+                raise ValueError("请提供原文件名，文件名不能包含目录。")
+            kind = FORMATS.get(Path(name).suffix.lower())
+            if kind is None:
+                raise ValueError("素材文件扩展名不受支持。")
+            expected = fields.get("sha256")
+            if expected is not None and not re.fullmatch(r"[0-9a-fA-F]{64}", expected):
+                raise ValueError("sha256 必须是 64 位十六进制校验值。")
+
+            with tempfile.TemporaryDirectory(prefix="api-import-", dir=c.library.root / "staging") as tmp:
+                path = Path(tmp) / "upload"
+                checksum, received = hashlib.sha256(), 0
+                async with await anyio.open_file(path, "xb") as output:
+                    async for chunk in request.stream():
+                        received += len(chunk)
+                        if received > size:
+                            raise ValueError("接收大小与文件声明不符。")
+                        checksum.update(chunk)
+                        await output.write(chunk)
+                if received != size:
+                    raise ValueError("接收大小与文件声明不符。")
+                sha = checksum.hexdigest()
+                if expected is not None and sha != expected.lower():
+                    raise ValueError("素材完整性校验不一致，未导入。")
+                source_id = hashlib.sha256((name + "\0" + sha).encode("utf-8")).hexdigest()
+                metadata = {"source": "api_upload", "source_id": source_id, "media_type": kind,
+                            "tags": ["API 导入"], "details": {"original_name": name}}
+                asset, created = await anyio.to_thread.run_sync(
+                    lambda: c.library.archive(path, metadata, sha, report_created=True))
+            return JSONResponse({"asset_id": asset, "deduplicated": not created, "media_type": kind,
+                                 "path": f"/api/library/{asset}/file"}, status_code=201 if created else 200)
+        except ClientDisconnect:
+            return JSONResponse({"error": "文件传输中断，素材尚未入库。"}, status_code=400)
+        except (UnidentifiedImageError, Image.DecompressionBombError, SyntaxError):
+            return JSONResponse({"error": "无法读取素材内容。"}, status_code=400)
+        except ValueError as exc:
+            return JSONResponse({"error": safe_error(exc)}, status_code=400)
+        except (OSError, sqlite3.Error):
+            return JSONResponse({"error": "素材库暂时无法保存，请稍后重试。"}, status_code=503)
+
     async def library_music_ingest(request):
         # Register Flow Music clips into the material library. Downloads are
         # restricted to the pinned Flow Music storage host with DNS-resolution
@@ -1678,6 +1746,7 @@ def create_app(root, adapter, test=False):
         Route("/api/remote/{ident}/finish", remote_finish, methods=["POST"]),
         WebSocketRoute("/api/remote/{ident}/ws", remote_ws),
         Route("/api/library", materials),
+        Route(LIBRARY_IMPORT_PATH, library_import, methods=["POST"]),
         Route("/api/library/music", library_music_ingest, methods=["POST"]),
         Route("/api/library/facets", material_facets),
         Route("/api/library/config", index_config, methods=["GET", "POST"]),
@@ -1751,9 +1820,12 @@ def create_app(root, adapter, test=False):
                 )
             ):
                 return JSONResponse({"error": "请从后台页面发起操作。"}, status_code=403)
-            if request.headers.get("x-console-request") != "1" or not request.headers.get(
-                "content-type", ""
-            ).startswith("application/json"):
+            content_type = request.headers.get("content-type", "")
+            material_upload = request.method == "POST" and request.url.path == LIBRARY_IMPORT_PATH
+            valid_content = (origin == "http://" + host and
+                             content_type.split(";", 1)[0].strip().lower() == "application/octet-stream"
+                             if material_upload else content_type.startswith("application/json"))
+            if request.headers.get("x-console-request") != "1" or not valid_content:
                 return JSONResponse({"error": "请求格式不正确。"}, status_code=403)
         if (
             request.url.path.startswith("/api/")

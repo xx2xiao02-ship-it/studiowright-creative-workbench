@@ -3964,6 +3964,7 @@ function materialSize(bytes) {
 function materialSource(origin) {
   if (origin.source === 'studiowright') return 'StudioWright';
   if (origin.source === 'windows_local') return 'Windows 素材';
+  if (origin.source === 'api_upload') return 'API 导入';
   if (origin.source === 'flow2api-windows') return 'Flow2API · Windows';
   if (origin.source === 'flow2api-ubuntu') return 'Flow2API · Ubuntu';
   return origin.source || '原来源未记录';
