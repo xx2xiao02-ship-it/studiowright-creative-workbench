@@ -13,6 +13,50 @@ from test_flow_regressions import fixture_directory
 
 
 class AutomaticRecoverySafety(unittest.IsolatedAsyncioTestCase):
+    async def test_independent_accounts_repair_in_parallel_with_a_limit(self):
+        with fixture_directory() as directory:
+            controller = types.ModuleType('shared_session_controller')
+            controller.flow_runtime = lambda: (None, types.SimpleNamespace(locks_dir=lambda: directory))
+            profiles = ['one', 'two', 'three', 'four', 'busy']
+            accounts = [dict(profile=p, key='flow-account-'+p, email=p+'@example.invalid',
+                             projects=[], review_task=None, repairable=True) for p in profiles]
+            entered = set()
+            peak = set()
+            full = asyncio.Event()
+            release = asyncio.Event()
+
+            async def repair_account(account, *args, **kwargs):
+                profile = account['profile']
+                entered.add(profile)
+                if len(entered) >= len(peak):
+                    peak.clear()
+                    peak.update(entered)
+                if len(entered) == 3:
+                    full.set()
+                try:
+                    await release.wait()
+                    if profile == 'two':
+                        raise ValueError('window changed')
+                    return 'ok', None
+                finally:
+                    entered.remove(profile)
+
+            with patch.dict(sys.modules, {'shared_session_controller': controller}), \
+                 patch('flow_window_policy.Lifecycle'), \
+                 patch.object(recovery, 'inspect_page', AsyncMock(return_value='binding')), \
+                 patch.object(recovery, 'repair', side_effect=repair_account), \
+                 patch.object(recovery.subprocess, 'check_output', return_value='active'):
+                run = asyncio.create_task(recovery.recover(dict(accounts=accounts, bindings=[], busy=['busy'])))
+                try:
+                    await asyncio.wait_for(full.wait(), timeout=3)
+                    self.assertEqual(len(entered), 3)
+                finally:
+                    release.set()
+                    result = await asyncio.wait_for(run, timeout=3)
+            self.assertEqual(len(peak), 3)
+            self.assertEqual({p: item['page'] for p, item in result.items()},
+                             dict(one='ok', two='unconfirmed', three='ok', four='ok'))
+
     async def run_case(self, page='binding', busy=False, review=None, repairable=True, reset_draft=None,
                        maintenance=False):
         with fixture_directory() as directory:

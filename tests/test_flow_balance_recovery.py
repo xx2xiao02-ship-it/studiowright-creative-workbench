@@ -6,7 +6,7 @@ import sys
 import tempfile
 from types import SimpleNamespace as S
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1] / 'packaging/ubuntu/snapshot'
 sys.path[:0] = [str(ROOT/'flow/console'), str(ROOT/'workbench')]
@@ -159,6 +159,46 @@ class BalanceObservation(unittest.TestCase):
 
 
 class BalanceScheduler(unittest.IsolatedAsyncioTestCase):
+    async def test_reads_two_accounts_in_parallel_and_defers_busy_accounts(self):
+        spec = spec_from_file_location('flow_balance_console', ROOT/'flow/console/server.py')
+        server = module_from_spec(spec)
+        spec.loader.exec_module(server)
+        rows = [dict(profile=p) for p in ('a', 'b', 'c', 'busy', 'remote', 'paused')]
+        rows[-1]['risk_paused'] = True
+        slot = Mock()
+        console = S(balance_refreshing=False, balance_busy=set(), busy={'busy'},
+                    root=Path('.'), store=S(accounts=lambda: rows, page_incidents=dict),
+                    remote=S(for_profile=lambda profile: profile == 'remote'),
+                    dispatch_limit=S(paused=lambda: False, try_acquire=lambda: slot),
+                    insights=S(record=Mock()))
+        started = []
+        two_active = asyncio.Event()
+        release = asyncio.Event()
+
+        async def panel(account, *args, **kwargs):
+            started.append(account['profile'])
+            if len(started) == 2:
+                two_active.set()
+            await release.wait()
+            return {'balance':12, 'next_credit_date':None}
+
+        with patch.object(server, 'account_status', return_value=rows), \
+             patch('balance_reader.read_balance', side_effect=panel):
+            run = asyncio.create_task(server.Console.read_balance_batch(console, None))
+            try:
+                await asyncio.wait_for(two_active.wait(), timeout=3)
+                self.assertCountEqual(started, ['a', 'b'])
+                self.assertEqual(console.balance_busy, {'a', 'b'})
+            finally:
+                release.set()
+                deferred = await asyncio.wait_for(run, timeout=3)
+        self.assertEqual(deferred, {'busy', 'remote'})
+        self.assertCountEqual(started, ['a', 'b', 'c'])
+        self.assertEqual(slot.close.call_count, 3)
+        self.assertEqual(console.insights.record.call_count, 3)
+        self.assertFalse(console.balance_busy)
+        self.assertFalse(console.balance_refreshing)
+
     async def test_only_temporarily_unavailable_account_is_retried_twice(self):
         spec = spec_from_file_location('flow_balance_console', ROOT/'flow/console/server.py')
         server = module_from_spec(spec)

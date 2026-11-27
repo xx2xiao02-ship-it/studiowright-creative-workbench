@@ -17,6 +17,7 @@ from task_window_registry import TaskWindowRegistry, canonical_project_url, proc
 STATE = Path.home()/'.local/state/creative-unified-workbench'
 CONFLICTS = {'preparing','submitting','submitted','generated','downloading','result_unknown'}
 ACTIVE = {'running','dispatching'}
+READINESS_REPAIR_WORKERS = 3
 DISMISS_UPDATE = r"""(() => {
   if (location.origin!=='https://flow.google.com') return false;
   const visible=e=>!!e.getClientRects().length && getComputedStyle(e).visibility==='visible';
@@ -481,7 +482,10 @@ async def reopen_redirected_project(ws, account, expected, project, actions):
     return state
 
 
-async def repair(account, initial, actions, safe_only=False, reset_draft=False, auto_reset_draft=False):
+async def repair(account, initial, actions, safe_only=False, reset_draft=False, auto_reset_draft=False,
+                 browser_start=None):
+    if browser_start is None:
+        browser_start = asyncio.Lock()
     import websockets
     from flow_window_policy import Lifecycle
     from task_coordinator import Coordinator
@@ -613,8 +617,9 @@ async def repair(account, initial, actions, safe_only=False, reset_draft=False, 
     except (OSError,TimeoutError,websockets.WebSocketException):
         if not restart_safe:
             return 'unconfirmed',None
-        await asyncio.to_thread(guard_live,account)
-        await asyncio.to_thread(restart_managed,current)
+        async with browser_start:
+            await asyncio.to_thread(guard_live,account)
+            await asyncio.to_thread(restart_managed,current)
         actions.append('restart')
         for _ in range(12):
             await asyncio.sleep(.5)
@@ -627,7 +632,7 @@ async def repair(account, initial, actions, safe_only=False, reset_draft=False, 
             return 'binding',None
         # The restarted browser may reopen the homepage. Reuse the same safety
         # checks in a second round; never perform a second reload or restart.
-        return await repair(account,'after_restart',actions,safe_only=safe_only)
+        return await repair(account,'after_restart',actions,safe_only=safe_only,browser_start=browser_start)
     provisional = dict(current,project_url=desired,binding_state='verified')
     account = dict(account,projects=projects)
     verdict = 'unconfirmed'
@@ -656,18 +661,19 @@ async def repair(account, initial, actions, safe_only=False, reset_draft=False, 
             and any(action in actions for action in ('reload','open_project'))):
         # The operator authorized refresh/restart of this exact idle task window.
         # Recheck the live account and page before escalating beyond a refresh.
-        await asyncio.to_thread(guard_live,account)
-        async with websockets.connect(endpoint,open_timeout=2,close_timeout=1,max_size=65536) as ws:
-            last = await evaluate(ws,expected)
-        if not last.get('account') or not last.get('origin') or last.get('busy') or last.get('draft'):
-            return verdict,None
-        await asyncio.to_thread(restart_managed,current,allow_responsive=True)
+        async with browser_start:
+            await asyncio.to_thread(guard_live,account)
+            async with websockets.connect(endpoint,open_timeout=2,close_timeout=1,max_size=65536) as ws:
+                last = await evaluate(ws,expected)
+            if not last.get('account') or not last.get('origin') or last.get('busy') or last.get('draft'):
+                return verdict,None
+            await asyncio.to_thread(restart_managed,current,allow_responsive=True)
         actions.append('restart')
         for _ in range(12):
             await asyncio.sleep(.5)
             try:
                 await candidate(account)
-                return await repair(account,'after_restart',actions,safe_only=safe_only)
+                return await repair(account,'after_restart',actions,safe_only=safe_only,browser_start=browser_start)
             except (OSError,ValueError):
                 continue
         return 'binding',None
@@ -707,45 +713,49 @@ async def recover(payload):
                         and not payload.get('operator_dispatch_paused'))
     bindings = {b['profile']:b for b in payload['bindings']}
     lifecycle = {w['profile']:w for w in Lifecycle().status()}
-    out = {}
-    deadline = asyncio.get_running_loop().time() + 140
-    for account in payload['accounts']:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 140
+    parallel_repairs = asyncio.Semaphore(READINESS_REPAIR_WORKERS)
+    browser_start = asyncio.Lock()
+
+    async def check_account(account):
+        async with parallel_repairs:
+            if loop.time() >= deadline - 2:
+                return None
+            return await repair_account(account)
+
+    async def repair_account(account):
         if payload.get('operator_dispatch_paused'):
             account = dict(account, operator_dispatch_paused=True)
-        if asyncio.get_running_loop().time() >= deadline - 2:
-            break
         p = account['profile']
-        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}',p):
-            continue
-        if p in busy:
-            continue
-        if payload.get('safe_only') and not account.get('repairable'):
-            continue
         actions = []
         try:
             if account['repairable'] and not account.get('review_task') and not payload.get('manual_review'):
                 unit = 'studiowright-browser-'+p+'.service'
-                status = subprocess.check_output(['systemctl','--user','show',unit,'-p','ActiveState','--value'],
-                                                 text=True,timeout=3).strip()
+                status = (await asyncio.to_thread(subprocess.check_output,
+                    ['systemctl','--user','show',unit,'-p','ActiveState','--value'], text=True,timeout=3)).strip()
                 if status in {'inactive','failed'} and await asyncio.to_thread(_discover_chrome, p) is None:
-                    await asyncio.to_thread(guard_live,account)
-                    from activation_browser import main as open_flow
-                    try:
-                        await asyncio.to_thread(open_flow,account['key'].removeprefix('flow-account-'),flow_only_start=True)
-                        actions.append('open_browser')
-                    except ValueError as exc:
-                        if str(exc)!='flow_browser_already_running':
-                            raise
+                    # Launching a browser can take the shared desktop foreground.
+                    async with browser_start:
+                        if loop.time() >= deadline - 2:
+                            return None
+                        await asyncio.to_thread(guard_live,account)
+                        from activation_browser import main as open_flow
+                        try:
+                            await asyncio.to_thread(open_flow,account['key'].removeprefix('flow-account-'),flow_only_start=True)
+                            actions.append('open_browser')
+                        except ValueError as exc:
+                            if str(exc)!='flow_browser_already_running':
+                                raise
             with FileLock(str(paths.locks_dir()/(p+'.lock')),thread_local=False).acquire(timeout=0):
                 if account.get('review_task'):
                     released = review_hold(account,account['review_task'],manual=payload.get('manual_review') is True)
                     if released:
                         actions.append('release_review')
                     if payload.get('manual_review') or not released:
-                        out[p] = {'page':'unconfirmed','actions':actions}
-                        continue
+                        return {'page':'unconfirmed','actions':actions}
                 if not account['repairable']:
-                    continue
+                    return None
                 binding = bindings.get(p, {})
                 try:
                     before = await asyncio.wait_for(inspect_page(account,binding),timeout=5)
@@ -753,16 +763,17 @@ async def recover(payload):
                     before = 'binding'
                 old_draft = before == 'ok' and (Coordinator().window(p) or {}).get('state') == 'blocked_draft'
                 if before == 'busy' or (before == 'ok' and account.get('refresh_after_busy')):
-                    verdict,_ = await asyncio.wait_for(repair(account,'busy',actions,safe_only=True),
-                        timeout=min(45,max(1,deadline-asyncio.get_running_loop().time())))
+                    verdict,_ = await asyncio.wait_for(repair(account,'busy',actions,safe_only=True,
+                        browser_start=browser_start), timeout=min(45,max(1,deadline-loop.time())))
                 elif before == 'unique' or (before == 'ok' and not old_draft and lifecycle.get(p,{}).get('unique_ok') != 1):
                     verdict = await asyncio.wait_for(reconcile_fixed_window(account,binding,actions),
-                        timeout=min(45,max(1,deadline-asyncio.get_running_loop().time())))
+                        timeout=min(45,max(1,deadline-loop.time())))
                 elif (before in {'binding','project','editor','overlay','load_failed','flow_landing'} or old_draft
                       or (before == 'draft' and (reset_draft or auto_reset_draft))):
                     verdict,_ = await asyncio.wait_for(repair(account,before,actions,
-                        safe_only=payload.get('safe_only') is True,reset_draft=reset_draft,auto_reset_draft=auto_reset_draft),
-                        timeout=min(45,max(1,deadline-asyncio.get_running_loop().time())))
+                        safe_only=payload.get('safe_only') is True,reset_draft=reset_draft,
+                        auto_reset_draft=auto_reset_draft,browser_start=browser_start),
+                        timeout=min(45,max(1,deadline-loop.time())))
                 else:
                     verdict = before
         except Timeout:
@@ -771,7 +782,14 @@ async def recover(payload):
             verdict = 'unconfirmed'
         if actions and verdict != 'ok':
             Coordinator().event(p,None,'readiness_recovery_needs_review',actions=actions,verdict=verdict)
-        out[p] = {'page':verdict,'actions':actions}
+        return {'page':verdict,'actions':actions}
+
+    accounts = {a['profile']:a for a in payload['accounts']
+                if re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}',a['profile']) and a['profile'] not in busy
+                and (not payload.get('safe_only') or a.get('repairable'))}
+    async with asyncio.TaskGroup() as group:
+        repairs = {profile: group.create_task(check_account(account)) for profile, account in accounts.items()}
+    out = {profile: result for profile, task in repairs.items() if (result := task.result()) is not None}
     if payload.get('operator_dispatch_paused') and operator_dispatch_paused():
         from account_insights import Insights
         from balance_reader import read_balance
@@ -791,7 +809,7 @@ async def recover(payload):
                     insights.record(profile, balance['balance'], next_credit_date=balance.get('next_credit_date'))
                 except (OSError, ValueError, TimeoutError, sqlite3.Error, subprocess.SubprocessError):
                     pass
-            await asyncio.gather(*(refresh(dict(a, operator_dispatch_paused=True)) for a in payload['accounts']))
+            await asyncio.gather(*(refresh(dict(a, operator_dispatch_paused=True)) for a in accounts.values()))
     return out
 
 

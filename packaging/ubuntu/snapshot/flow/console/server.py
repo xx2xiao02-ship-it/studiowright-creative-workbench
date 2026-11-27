@@ -52,6 +52,7 @@ BRIDGE_ID = 'aaipdbnbbgeadlodajhcobjmomnemclj'
 BRIDGE_IDS = (BRIDGE_ID, BRIDGE_LEGACY_ID)
 BRIDGE_ORIGINS = frozenset('chrome-extension://' + ident for ident in BRIDGE_IDS)
 BALANCE_SWEEP_SECONDS = 300
+BALANCE_READ_WORKERS = 2
 BALANCE_RETRY_DELAYS = (10, 25)
 
 
@@ -546,47 +547,52 @@ class Console:
     async def read_balance_batch(self, profiles):
         from balance_reader import read_balance, BalancePanelUnavailable, BalanceReadDeferred
         from playwright.async_api import async_playwright
-        retry = set()
         self.balance_refreshing = True
         try:
             async with async_playwright() as pw:
                 accounts = account_status(self.store.accounts(), self.root / 'data/studiowright.db')
                 incidents = self.store.page_incidents()
-                for account in accounts:
+                parallel_reads = asyncio.Semaphore(BALANCE_READ_WORKERS)
+
+                async def read_account(account):
+                    async with parallel_reads:
+                        return await read_available_account(account)
+
+                async def read_available_account(account):
                     profile = account['profile']
-                    if profiles is not None and profile not in profiles:
-                        continue
-                    if self.dispatch_limit.paused():
-                        break
-                    if (account.get('flow_removed') or profile in incidents or account.get('risk_paused') is True
+                    if (self.dispatch_limit.paused() or account.get('flow_removed')
+                            or profile in incidents or account.get('risk_paused') is True
                             or account.get('generation_state') == 'cooling_down'):
-                        continue
-                    if profile in self.busy or self.remote.for_profile(profile):
-                        retry.add(profile)
-                        continue
+                        return None
+                    if profile in self.busy or profile in self.balance_busy or self.remote.for_profile(profile):
+                        return profile
                     slot = self.dispatch_limit.try_acquire()
                     if slot is None:
-                        retry.add(profile)
-                        continue
+                        return profile
                     self.balance_busy.add(profile)
                     try:
                         balance = await asyncio.wait_for(
                             read_balance(account, pw, include_details=True, incident_root=self.root), timeout=20)
                         self.insights.record(profile, balance['balance'], next_credit_date=balance.get('next_credit_date'))
                     except BalanceReadDeferred:
-                        retry.add(profile)
+                        return profile
                     except BalancePanelUnavailable as exc:
                         self.insights.record(profile, error=str(exc), transient=True)
-                        retry.add(profile)
+                        return profile
                     except Exception as exc:
                         message = str(exc) if isinstance(exc, ValueError) else '余额读取暂未完成，保留上次记录。'
                         self.insights.record(profile, error=message)
                     finally:
                         self.balance_busy.discard(profile)
                         slot.close()
+                    return None
+
+                async with asyncio.TaskGroup() as group:
+                    reads = [group.create_task(read_account(account)) for account in accounts
+                             if profiles is None or account['profile'] in profiles]
+                return {task.result() for task in reads} - {None}
         finally:
             self.balance_refreshing = False
-        return retry
 
     async def balance_worker(self):
         if self.test:
