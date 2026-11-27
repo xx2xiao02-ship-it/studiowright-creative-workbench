@@ -138,8 +138,16 @@ class FlowPromptVerification(unittest.IsolatedAsyncioTestCase):
 
     async def test_long_prompt_deletes_only_the_first_five_characters(self):
         self.prompt = 'ABCDE' + 'x' * 267
+        focus_texts = []
+
+        def confirm_focus(*_):
+            focus_texts.append(self.editor)
+            return True
+
+        self.driver.confirm_focus.side_effect = confirm_focus
         await self.submit(prefix_length=5)
         self.driver.copy_prompt_and_paste.assert_awaited_once()
+        self.assertEqual(focus_texts, ['', 'ABCDE', self.prompt, self.prompt])
         self.assertEqual(self.actions, [
             *(('insert', char) for char in 'ABCDE'), ('delete', 'ABCDE'), ('paste', self.prompt),
             ('checkpoint', self.prompt), ('send', self.prompt),

@@ -88,9 +88,11 @@ class FlowVideoPipeline(unittest.IsolatedAsyncioTestCase):
                             patch('foreground_input._pacing_wait', AsyncMock()), \
                             patch('pointer_sequence.record_input_action'):
                         if scenario == 'focus_lost':
-                            with self.assertRaisesRegex(InputNotSubmitted, 'window_focus_lost_during_typing'):
+                            with self.assertRaisesRegex(InputNotSubmitted, '^window_focus_lost$'):
                                 await flow_submit(**kwargs)
-                            self.assertEqual(actions, [('insert', 'A')])
+                            self.assertEqual(actions, [('insert', 'A'), ('insert', ' ')])
+                            driver.confirm_focus.assert_awaited()
+                            self.assertEqual(driver.confirm_focus.await_count, 2)
                         else:
                             await flow_submit(**kwargs)
                             self.assertEqual(editor, prompt)

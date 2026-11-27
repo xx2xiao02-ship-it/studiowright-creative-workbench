@@ -132,11 +132,11 @@ async def _type_prompt_on_device(driver, page, composer, target, keyboard, promp
     return True
 
 
-async def _verify_prompt(driver, page, composer, target, prompt):
+async def _verify_prompt(driver, page, composer, target, prompt, *, check_focus_while_waiting=True):
     """Poll for an exact match within the caller's verification budget."""
     observed = await read_flow_prompt(composer)
     while observed != prompt:
-        if not await driver.confirm_focus(target, page, composer):
+        if check_focus_while_waiting and not await driver.confirm_focus(target, page, composer):
             raise InputNotSubmitted('window_focus_lost')
         await asyncio.sleep(.05)
         observed = await read_flow_prompt(composer)
@@ -177,9 +177,6 @@ async def _flow_prompt_step(step, deadline, record):
 async def _prepare_flow_prefix(driver, page, composer, target, prompt, record):
     if await driver.composer_text(page, composer) not in ('', '\n'):
         raise InputNotSubmitted('composer_not_empty')
-    if not await driver.confirm_focus(target, page, composer):
-        raise InputNotSubmitted('window_focus_lost')
-
     characters = await page.evaluate(FLOW_PREFIX_CHARACTERS, prompt)
     if len(characters) >= 2:
         characters = characters[:random.randint(2, len(characters))]
@@ -189,11 +186,11 @@ async def _prepare_flow_prefix(driver, page, composer, target, prompt, record):
             # Paste preserves line breaks without triggering an Enter shortcut.
             await driver.copy_prompt_and_paste(page, composer, target, prefix)
         else:
+            if not await driver.confirm_focus(target, page, composer):
+                raise InputNotSubmitted('window_focus_lost')
             for character in characters:
-                if not await driver.confirm_focus(target, page, composer):
-                    raise InputNotSubmitted('window_focus_lost_during_typing')
                 await page.keyboard.insert_text(character)
-        await _verify_prompt(driver, page, composer, target, prefix)
+        await _verify_prompt(driver, page, composer, target, prefix, check_focus_while_waiting=False)
         if not await composer.evaluate(FLOW_SELECT_PREFIX, prefix):
             raise InputNotSubmitted('flow_prefix_changed_before_deletion')
         await page.keyboard.press('Backspace')
