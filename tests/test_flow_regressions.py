@@ -1,4 +1,5 @@
 """Exercise the packaged API implementation without a provider connection."""
+import asyncio
 import sys
 import shutil
 from contextlib import contextmanager
@@ -94,9 +95,33 @@ class FlowPromptVerification(unittest.IsolatedAsyncioTestCase):
 
     async def test_incorrect_text_keeps_a_flow_task_before_submission(self):
         self.driver.copy_prompt_and_paste.side_effect = lambda *_: self.paste(self.prompt + '!')
-        with patch('foreground_input.FLOW_PROMPT_TIMEOUT', .02):
-            with self.assertRaisesRegex(InputNotSubmitted, '^prompt_input_timeout$'):
+        with patch('foreground_input.FLOW_VERIFY_TIMEOUT', .02):
+            with self.assertRaisesRegex(InputNotSubmitted, '^prompt_verify_timeout$'):
                 await self.submit()
+        self.checkpoint.assert_not_awaited()
+        self.send.assert_not_awaited()
+
+    async def test_slow_paste_does_not_spend_the_verification_budget(self):
+        async def slow_paste(*args):
+            await asyncio.sleep(.1)
+            self.paste(*args)
+
+        self.driver.copy_prompt_and_paste.side_effect = slow_paste
+        with patch('foreground_input.FLOW_VERIFY_TIMEOUT', .05):
+            await self.submit()
+        self.send.assert_awaited_once()
+
+    async def test_paste_timeout_never_enters_verification_or_submission(self):
+        self.prompt = '字'
+
+        async def stalled_paste(*_):
+            await asyncio.Event().wait()
+
+        self.driver.copy_prompt_and_paste.side_effect = stalled_paste
+        with patch('foreground_input.FLOW_PASTE_TIMEOUT', .02):
+            with self.assertRaisesRegex(InputNotSubmitted, '^prompt_paste_timeout$'):
+                await self.submit()
+        self.composer.evaluate.assert_not_awaited()
         self.checkpoint.assert_not_awaited()
         self.send.assert_not_awaited()
 

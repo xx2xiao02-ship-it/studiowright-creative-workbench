@@ -264,6 +264,15 @@ def task_failure_reason(row):
         return '后台未提供具体失败原因。'
     known = {
         'pasted_text_mismatch': '提示词粘贴后校验不一致，任务在发送前停止。',
+        'prompt_input_timeout': '输入提示词超时，任务未发送。当时的记录未细分粘贴和核对步骤。',
+        'prompt_prefix_timeout': '提示词试输或清除试输文字超时，未开始粘贴全文，任务未发送。',
+        'prompt_prefix_failed': '提示词试输或清除试输文字失败，未开始粘贴全文，任务未发送。',
+        'prompt_paste_timeout': '粘贴提示词超时，剪贴板粘贴步骤未完成，任务未发送。',
+        'prompt_paste_failed': '粘贴提示词失败，任务未发送。',
+        'prompt_verify_timeout': '粘贴后核对提示词超时，未确认输入框内容与原文一致，任务未发送。',
+        'prompt_verify_failed': '粘贴后读取并核对提示词失败，任务未发送。',
+        'flow_prefix_changed_before_deletion': '试输文字发生变化，已保留输入框内容，任务未发送。',
+        'flow_prefix_deletion_incomplete': '试输文字未清除干净，未粘贴全文，任务未发送。',
         'desktop_keyboard_not_ready': 'Ubuntu 桌面键盘控制未就绪，任务在粘贴和发送前停止。',
         'desktop_keyboard_authorization_timeout': '等待 Ubuntu 桌面键盘控制授权超时，未粘贴或发送。',
         'desktop_binding_unconfirmed': '无法确认账号对应的浏览器窗口，任务在发送前停止。',

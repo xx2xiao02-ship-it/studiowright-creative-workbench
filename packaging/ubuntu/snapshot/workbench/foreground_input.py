@@ -7,6 +7,7 @@ import asyncio
 import json
 import random
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -131,13 +132,10 @@ async def _type_prompt_on_device(driver, page, composer, target, keyboard, promp
     return True
 
 
-async def _verify_prompt(driver, page, composer, target, prompt, seconds=2.0):
-    """Poll until the editor holds exactly ``prompt``; never retype."""
-    deadline = time.monotonic() + seconds
+async def _verify_prompt(driver, page, composer, target, prompt):
+    """Poll for an exact match within the caller's verification budget."""
     observed = await read_flow_prompt(composer)
     while observed != prompt:
-        if time.monotonic() >= deadline:
-            raise InputNotSubmitted('pasted_text_mismatch')
         if not await driver.confirm_focus(target, page, composer):
             raise InputNotSubmitted('window_focus_lost')
         await asyncio.sleep(.05)
@@ -146,7 +144,33 @@ async def _verify_prompt(driver, page, composer, target, prompt, seconds=2.0):
         raise InputNotSubmitted('window_focus_lost')
 
 
-async def enter_hybrid_prompt(driver, page, composer, target, prompt, record):
+FLOW_PREFIX_TIMEOUT = 4.0
+FLOW_PASTE_TIMEOUT = 10.0
+FLOW_VERIFY_TIMEOUT = 4.0
+
+
+@asynccontextmanager
+async def _flow_prompt_step(step, seconds, record):
+    started = time.monotonic()
+    record('flow_prompt_step_started', step=step, seconds=seconds)
+    try:
+        async with asyncio.timeout(seconds):
+            yield
+    except InputNotSubmitted as exc:
+        record('flow_prompt_step_failed', step=step, reason=str(exc))
+        raise
+    except Exception as exc:
+        outcome = 'timeout' if isinstance(exc, TimeoutError) else 'failed'
+        reason = f'prompt_{step}_{outcome}'
+        record('flow_prompt_step_failed', step=step, reason=reason,
+               error=type(exc).__name__)
+        raise InputNotSubmitted(reason) from exc
+    else:
+        record('flow_prompt_step_completed', step=step,
+               elapsed_ms=round((time.monotonic() - started) * 1000))
+
+
+async def _prepare_flow_prefix(driver, page, composer, target, prompt, record):
     if await driver.composer_text(page, composer) not in ('', '\n'):
         raise InputNotSubmitted('composer_not_empty')
     if not await driver.confirm_focus(target, page, composer):
@@ -165,19 +189,21 @@ async def enter_hybrid_prompt(driver, page, composer, target, prompt, record):
                 if not await driver.confirm_focus(target, page, composer):
                     raise InputNotSubmitted('window_focus_lost_during_typing')
                 await page.keyboard.insert_text(character)
-        await _verify_prompt(driver, page, composer, target, prefix, seconds=FLOW_PROMPT_TIMEOUT)
+        await _verify_prompt(driver, page, composer, target, prefix)
         if not await composer.evaluate(FLOW_SELECT_PREFIX, prefix):
             raise InputNotSubmitted('flow_prefix_changed_before_deletion')
         await page.keyboard.press('Backspace')
         if await driver.composer_text(page, composer) not in ('', '\n'):
             raise InputNotSubmitted('flow_prefix_deletion_incomplete')
 
-    record('clipboard_paste_started', characters=len(prompt))
-    await driver.copy_prompt_and_paste(page, composer, target, prompt)
-    await _verify_prompt(driver, page, composer, target, prompt, seconds=FLOW_PROMPT_TIMEOUT)
-
-
-FLOW_PROMPT_TIMEOUT = 4.0
+async def enter_hybrid_prompt(driver, page, composer, target, prompt, record):
+    async with _flow_prompt_step('prefix', FLOW_PREFIX_TIMEOUT, record):
+        await _prepare_flow_prefix(driver, page, composer, target, prompt, record)
+    async with _flow_prompt_step('paste', FLOW_PASTE_TIMEOUT, record):
+        record('clipboard_paste_started', characters=len(prompt))
+        await driver.copy_prompt_and_paste(page, composer, target, prompt)
+    async with _flow_prompt_step('verify', FLOW_VERIFY_TIMEOUT, record):
+        await _verify_prompt(driver, page, composer, target, prompt)
 
 
 @dataclass(frozen=True)
@@ -235,15 +261,8 @@ async def paste_and_submit_reserved(*, driver, page, composer, target, prompt,
                         raise
                     await asyncio.sleep(.6)
             if hybrid:
-                try:
-                    record('hybrid_input_timeout_budget', seconds=FLOW_PROMPT_TIMEOUT, characters=len(prompt))
-                    await asyncio.wait_for(
-                        enter_hybrid_prompt(driver, page, composer, target, prompt, record),
-                        timeout=FLOW_PROMPT_TIMEOUT,
-                    )
-                    record('hybrid_input_verified', characters=len(prompt))
-                except asyncio.TimeoutError as exc:
-                    raise InputNotSubmitted('prompt_input_timeout') from exc
+                await enter_hybrid_prompt(driver, page, composer, target, prompt, record)
+                record('hybrid_input_verified', characters=len(prompt))
             else:
                 # Empty contenteditable paragraphs such as <p><br></p> expose
                 # a single newline through innerText; they contain no draft text.
