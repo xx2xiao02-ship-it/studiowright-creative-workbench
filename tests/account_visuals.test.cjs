@@ -331,6 +331,21 @@ test('Gemini account avatars distinguish Neon and Carbon independently', () => {
   }
 });
 
+test('Gemini quota blocks show automatic recovery while Google verification stays available', () => {
+  const now = 1800000000;
+  const context = vm.createContext({});
+  load('geminiCardStatus', context);
+  const render = (quota, recovery, blocked = true) => context.geminiCardStatus(!blocked, blocked, quota, now, recovery);
+  const empty = {status:'ok', checked_at:now-10, five_hour:{remaining_percent:0}};
+  assert.equal(render(empty, 'waiting').label, '等待额度恢复');
+  assert.equal(render(empty, 'waiting').automaticQuotaRecovery, true);
+  assert.equal(render(null, 'waiting').label, '等待自动复查');
+  assert.equal(render(null, 'checking').label, '自动复查中');
+  assert.equal(render({status:'verification_required'}, 'waiting').label, '待 Google 核验');
+  assert.equal(render({status:'authorization_required'}, 'waiting').automaticQuotaRecovery, undefined);
+  assert.equal(render(null, null, false).label, '可调用');
+});
+
 test('usage bars preserve zero, exact usage, and unknown values', () => {
   const context = vm.createContext({Intl});
   load('esc', context);

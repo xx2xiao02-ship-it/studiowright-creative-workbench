@@ -31,6 +31,7 @@ def bare_reader(rows, module=None):
     reader.running = False
     reader.attempted = 0
     reader.pending_recovery = ()
+    reader.recovery_accounts = set()
     reader.rows = rows
     return reader
 
@@ -65,6 +66,15 @@ class AutoRefreshTickTest(unittest.TestCase):
         reader.check = lambda key, **_: read.append(key) or {'status':'ok'}
         self.assertEqual(reader._auto_refresh_tick(advanced_only=True),1)
         self.assertEqual(read,['b'])
+
+    def test_tick_refreshes_a_recovering_basic_account_and_leaves_verification_to_the_provider(self):
+        reader = bare_reader({'a'*64: {'status':'unavailable'}, 'b'*64: {'status':'verification_required'}})
+        reader.runtime = types.SimpleNamespace(text_models=lambda:{})
+        reader.watch_quota_recovery(['a'*64, 'b'*64, 'c'*64])
+        read = []
+        reader.check = lambda key, **_: read.append(key) or {'status':'ok'}
+        self.assertEqual(reader._auto_refresh_tick(advanced_only=True),2)
+        self.assertEqual(set(read), {'a'*64,'c'*64})
 
     def test_headless_usage_counts_only_google_shared_gemini_windows(self):
         module=load_quota_module()

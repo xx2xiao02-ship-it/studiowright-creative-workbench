@@ -315,6 +315,7 @@ class QuotaReader:
         self.runtime = runtime; self.lock = threading.Lock(); self.running = False; self.attempted = 0
         self.account_locks = {}
         self.authorization_refreshes = set()
+        self.recovery_accounts = set()
         self.explicit_attempted = 0
         self.pending_recovery = ()
         self.verification_links = {}
@@ -334,15 +335,16 @@ class QuotaReader:
     def _auto_refresh_tick(self, *, advanced_only=False):
         """One scheduled pass over the currently readable accounts.
 
-        Failed reads (verification required, network errors) stay on the
-        explicit-refresh path exactly like the manual button; the tick only
-        re-reads accounts whose numbers are actually shown on the panel."""
+        Quota recovery also reads blocked accounts outside the advanced pool
+        and can retry a transient network error on this ordinary schedule."""
         advanced=self.runtime.text_models() if advanced_only else None
         with self.lock:
             if self.running or not self.rows:
                 return 0
-            keys = tuple(k for k, r in self.rows.items() if r.get('status') in ('ok', 'not_read')
-                         and (advanced is None or k in advanced))
+            keys = tuple(k for k, r in self.rows.items()
+                         if (r.get('status') in ('ok', 'not_read')
+                             or k in self.recovery_accounts and r.get('status') in ('network_error','unavailable'))
+                         and (advanced is None or k in advanced or k in self.recovery_accounts))
             if not keys:
                 return 0
             self.running = True
@@ -396,6 +398,12 @@ class QuotaReader:
     def cached_accounts(self, keys):
         with self.lock:
             return {key:copy.deepcopy(self.rows.get(key,{})) for key in keys}
+
+    def watch_quota_recovery(self, keys):
+        with self.lock:
+            self.recovery_accounts = {key for key in keys if KEY.fullmatch(key)}
+            for key in self.recovery_accounts:
+                self.rows.setdefault(key, {'status':'not_read'})
 
     def _refresh(self,keys,recover=False):
         try:

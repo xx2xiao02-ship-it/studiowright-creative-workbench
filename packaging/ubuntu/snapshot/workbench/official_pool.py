@@ -8,7 +8,7 @@ import gemini_image_input as vision
 from gemini_completion import saved_capacity_completion, RECOVERED
 from gemini_effort import (ADVANCED_MODELS,DEFAULT_TEXT_MODEL,HYDROGEN_FAMILY,MODELS,THOUGHT_LEVELS,
                            resolve,resolve_flash_fallback)
-from official_quota import quota_restriction,reader_for
+from official_quota import QUOTA_WINDOWS,quota_restriction,reader_for
 from dispatch_limit import DispatchBusy
 
 # Ownership is explicit: queued official jobs or a saved native official conversation.
@@ -31,7 +31,23 @@ MAX_TIMEOUT_ATTEMPTS=4
 IMAGE_SESSION_START_TIMEOUT='protocol_timeout_2'
 DEFAULT_MAX_CONCURRENCY=50
 MAX_CONCURRENCY=50
-ACCOUNT_BLOCK_REASONS=(AUTH_UNSENT,'authorization_still_required','verification_required','quota_or_rate_limit')
+QUOTA_LIMIT_BLOCK='quota_or_rate_limit'
+QUOTA_RECHECK_COOLDOWN=15*60
+QUOTA_RECHECK_PREFIX='quota_recheck:'
+ACCOUNT_BLOCK_REASONS=(AUTH_UNSENT,'authorization_still_required','verification_required',QUOTA_LIMIT_BLOCK)
+
+def quota_restored(row, checked_after, now):
+    checked = row.get('checked_at')
+    if (row.get('status') != 'ok' or row.get('identity_matched') is not True
+            or type(checked) not in (int,float) or checked < checked_after
+            or not 0 <= now - checked <= 600):
+        return False
+    for window in QUOTA_WINDOWS:
+        entry = row.get(window)
+        value = entry.get('remaining_percent') if isinstance(entry,dict) else None
+        if type(value) not in (int,float) or not 0 < value <= 100:
+            return False
+    return True
 
 def account_quota_restriction(model,row,now):
     restriction=quota_restriction(row,now)
@@ -136,6 +152,8 @@ class OfficialPool:
             try:
                 self.reconcile_saved_replies()
                 self.archive_old_timeouts()
+            except (sqlite3.Error,OSError,ValueError):pass
+            try:self.recheck_quota_blocks()
             except (sqlite3.Error,OSError,ValueError):pass
 
     def archive_old_timeouts(self, now=None):
@@ -242,12 +260,70 @@ class OfficialPool:
     def readiness_block(db,key):
         row=db.execute('SELECT reason,created FROM official_account_blocks WHERE account_key=?',(key,)).fetchone()
         if not row:return None
+        if row[0]==QUOTA_LIMIT_BLOCK:return None
         if row[0] in READINESS_RECOVERABLE_BLOCKS:return tuple(row)
         if db.execute("""SELECT 1 FROM requests r JOIN official_jobs j USING(request_id)
                         WHERE r.account_key=? AND r.status='unknown' AND r.finished=?
                         AND j.reason=? AND j.readiness_probe=0""",(key,row[1],row[0])).fetchone():
             return tuple(row)
         return None
+
+    @staticmethod
+    def quota_limit_block(db, key):
+        row = db.execute('SELECT reason,created FROM official_account_blocks WHERE account_key=? AND reason=?',
+                         (key, QUOTA_LIMIT_BLOCK)).fetchone()
+        return tuple(row) if row else None
+
+    @staticmethod
+    def quota_recheck_due(db, key, block, quota, now):
+        last = db.execute("""SELECT MAX(COALESCE(r.finished,r.created))
+            FROM requests r JOIN official_jobs j USING(request_id)
+            WHERE r.account_key=? AND j.readiness_probe=1 AND r.created>=?
+              AND EXISTS(SELECT 1 FROM official_attempts a WHERE a.request_id=r.request_id)""",
+                          (key,block[1])).fetchone()[0]
+        return quota_restored(quota, max(block[1],last or 0)+QUOTA_RECHECK_COOLDOWN, now)
+
+    def recheck_quota_blocks(self):
+        """Queue a fresh probe after confirmed quota recovery, on the same account."""
+        from live_pool import Conflict
+
+        if self.stop.is_set() or self.pool.maintenance():
+            return []
+        available = self.runtime.inventory()
+        models = self.runtime.text_models()
+        reader = reader_for(self.runtime)
+        with self.pool.connection() as db:
+            blocks = {row['account_key']:(QUOTA_LIMIT_BLOCK,row['created']) for row in
+                      db.execute('SELECT account_key,created FROM official_account_blocks WHERE reason=?',
+                                 (QUOTA_LIMIT_BLOCK,))}
+            blocks = {key:block for key,block in blocks.items()
+                      if self.reason(db,key,available,block,readiness_probe=True) is None}
+            reader.watch_quota_recovery(blocks)
+            quotas = reader.cached_accounts(blocks)
+            now = time.time()
+            candidates = []
+            for key,block in blocks.items():
+                if busy_official(db,key) or not self.quota_recheck_due(db,key,block,quotas.get(key,{}),now):
+                    continue
+                old = db.execute("""SELECT j.model FROM requests r JOIN official_jobs j USING(request_id)
+                    WHERE r.account_key=? AND r.finished=? AND j.reason=? AND j.readiness_probe=0
+                    ORDER BY r.created DESC LIMIT 1""", (key,block[1],QUOTA_LIMIT_BLOCK)).fetchone()
+                enrolled = models.get(key,())
+                supported = old and (old[0] in enrolled or old[0] in MODELS.values())
+                model = old[0] if supported else text_default_for({key:enrolled})
+                candidates.append((key,block,model))
+        queued = []
+        for key,block,model in candidates:
+            if self.stop.is_set():
+                break
+            try:
+                result, created = self.generate(key,READINESS_PROMPT,str(uuid.uuid4()),[{'key':'flow-account-'+key}],
+                    model=model,readiness_probe=True,retry_policy='never',quota_recheck=block)
+            except (Conflict,ValueError,DispatchBusy):
+                continue
+            if created:
+                queued.append(result['request_id'])
+        return queued
 
     def concurrency_limit(self, db):
         row = db.execute('SELECT maximum FROM official_dispatch_settings WHERE id=1').fetchone()
@@ -389,7 +465,7 @@ class OfficialPool:
     def account_quotas(self, keys):
         return reader_for(self.runtime).cached_accounts(keys) if keys else {}
 
-    def generate(self,account,prompt,request_id,items,attachments=None,conversation_id=None,model=None,*,image_analysis=False,readiness_probe=False,retry_policy=None,effort=None,fallback_model=None):
+    def generate(self,account,prompt,request_id,items,attachments=None,conversation_id=None,model=None,*,image_analysis=False,readiness_probe=False,retry_policy=None,effort=None,fallback_model=None,quota_recheck=None):
         if retry_policy not in (None, "never"):raise ValueError("Invalid retry policy")
         from live_pool import Conflict
         if not self.ready:raise Conflict('官方调用尚未配置完成，未发送。')
@@ -410,7 +486,10 @@ class OfficialPool:
         legacy_flash = not (default_model or advanced or image_analysis or readiness_probe)
         if fallback_model and (account!='auto' or readiness_probe):
             raise ValueError('Flash 保底仅用于自动选账号的新请求。')
-        if advanced and (image_analysis or readiness_probe):
+        if quota_recheck is not None and (not readiness_probe or account=='auto' or image_analysis
+                or conversation_id or prompt!=READINESS_PROMPT or retry_policy!='never'):
+            raise ValueError('额度复查需要固定账号的独立测试。')
+        if advanced and (image_analysis or readiness_probe and quota_recheck is None):
             raise ValueError('高级模型仅用于文字对话。')
         models=self.runtime.text_models() if advanced or default_model or legacy_flash else {}
         if advanced and account!='auto' and model not in models.get(account,()):
@@ -428,7 +507,7 @@ class OfficialPool:
             payload.update(model=None,effort=requested_effort)
             digest=hashlib.sha256(json.dumps(payload,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
         now=time.time();available=self.runtime.inventory()
-        quota=self.account_quotas(available) if not readiness_probe else {}
+        quota=self.account_quotas(available) if not readiness_probe or quota_recheck is not None else {}
         selection='auto' if account=='auto' else 'manual'
         permitted=list(dict.fromkeys(i.get('key','').removeprefix('flow-account-') for i in items if isinstance(i,dict)))
         with self.pool.connection() as db:
@@ -444,6 +523,9 @@ class OfficialPool:
                 if readiness_probe:
                     if self.reason(db,account,available) is None or busy_official(db,account):
                         raise Conflict('账号已经就绪或正在运行任务，跳过验活。')
+                    if quota_recheck is not None and (self.quota_limit_block(db,account)!=quota_recheck
+                            or not self.quota_recheck_due(db,account,quota_recheck,quota.get(account,{}),time.time())):
+                        raise Conflict('账号额度尚未确认恢复，暂缓复查。')
                     recent=self.recent_readiness_probe(db,account)
                     if recent:
                         db.execute('COMMIT');return self.pool.get(recent[0]),False
@@ -484,7 +566,7 @@ class OfficialPool:
                 if fallback_model and not advanced:
                     raise ValueError('当前主模型无法使用 Flash 保底。')
                 eligible=[k for k in permitted if self.reason(
-                    db,k,available,self.readiness_block(db,k) if readiness_probe and k==account else None,
+                    db,k,available,(quota_recheck or self.readiness_block(db,k)) if readiness_probe and k==account else None,
                     readiness_probe=readiness_probe and k==account) is None]
                 requested_model=model
                 fallback_reason=None
@@ -512,8 +594,9 @@ class OfficialPool:
                 db.execute("INSERT INTO requests(request_id,account_key,prompt_digest,status,created,note,selection) VALUES(?,?,?,'queued',?,?,?)",(request_id,account,digest,now,'已进入官方调用队列；固定账号。',selection))
                 db.execute('INSERT INTO conversation_turns VALUES(?,?,?,?)',(request_id,conversation_id,prompt,json.dumps(attachments if image_analysis else [])))
                 db.execute('INSERT INTO conversation_attempt_models(request_id,model) VALUES(?,?)',(request_id,model))
-                db.execute('INSERT INTO official_jobs(request_id,conversation_id,model,native_before,readiness_probe,no_retry) VALUES(?,?,?,?,?,?)',
-                           (request_id,conversation_id,model,native,int(readiness_probe),int(retry_policy=='never')))
+                marker = QUOTA_RECHECK_PREFIX+float(quota_recheck[1]).hex() if quota_recheck is not None else None
+                db.execute('INSERT INTO official_jobs(request_id,conversation_id,model,native_before,readiness_probe,no_retry,reason) VALUES(?,?,?,?,?,?,?)',
+                           (request_id,conversation_id,model,native,int(readiness_probe),int(retry_policy=='never'),marker))
                 if selection=='auto':
                     db.execute('INSERT INTO official_auto_accounts VALUES(?,?)',(request_id,json.dumps(permitted)))
                 if fallback_model:
@@ -575,17 +658,33 @@ class OfficialPool:
                 quota=self.account_quotas(available) if rows else {}
                 for row in rows:
                     if probe_only is not None and bool(row['readiness_probe']) != probe_only:continue
+                    quota_probe = bool(row['readiness_probe'] and (row['job_reason'] or '').startswith(QUOTA_RECHECK_PREFIX))
                     if row['readiness_probe'] and db.execute(
-                            "SELECT 1 FROM requests r JOIN official_jobs j USING(request_id) WHERE (j.readiness_probe=0 AND r.status IN ('queued','dispatching')) OR (j.readiness_probe=1 AND r.status='dispatching') LIMIT 1").fetchone():continue
+                            """SELECT 1 FROM requests r JOIN official_jobs j USING(request_id)
+                               WHERE (j.readiness_probe=0 AND (r.status='queued' OR (?=0 AND r.status='dispatching')))
+                                  OR (j.readiness_probe=1 AND r.status='dispatching') LIMIT 1""",
+                            (int(quota_probe),)).fetchone():continue
                     if db.execute("SELECT 1 FROM requests r JOIN official_jobs j USING(request_id) WHERE j.conversation_id=? AND r.status='dispatching'",(row['conversation_id'],)).fetchone():continue
                     resumed=row['reauth_state']=='queued'
                     timed_out=row['job_reason']=='timeout_retry_queued'
-                    recovery=self.readiness_block(db,row['account_key']) if row['readiness_probe'] else None
+                    recovery=None
+                    if quota_probe:
+                        current=self.quota_limit_block(db,row['account_key'])
+                        if current and row['job_reason']==QUOTA_RECHECK_PREFIX+float(current[1]).hex():
+                            recovery=current
+                    elif row['readiness_probe']:
+                        recovery=self.readiness_block(db,row['account_key'])
                     timeout_block=('timeout_unconfirmed',row['finished']) if timed_out else None
                     ordinal=2 if resumed else 1
                     reason=self.reason(db,row['account_key'],available,
                                        (row['block_reason'],row['block_created']) if resumed else timeout_block or recovery,
                                        readiness_probe=bool(row['readiness_probe']))
+                    if not reason and quota_probe:
+                        if not recovery or not quota_restored(quota.get(row['account_key'],{}),
+                                                               recovery[1]+QUOTA_RECHECK_COOLDOWN,time.time()):
+                            reason='quota_recheck_deferred'
+                        elif row['model'] in ADVANCED_MODELS and row['model'] not in models.get(row['account_key'],()):
+                            reason='model_account_unavailable'
                     if not reason and not row['readiness_probe']:
                         if row['model'] in ADVANCED_MODELS and row['model'] not in models.get(row['account_key'],()):
                             reason='model_account_unavailable'
@@ -702,13 +801,13 @@ class OfficialPool:
             return run(*args,audit/'attempt-2')
         ordinal=job.get('ordinal',1)
         result=run(*args,audit if ordinal==1 else audit/f'attempt-{ordinal}',**({'probe':True} if job.get('readiness_probe') else {}))
-        if job.get('no_retry'):
-            return result
         if job.get('readiness_probe'):
             if result.get('reason')==AUTH_UNSENT:
                 return {**result,'reason':'readiness_authorization_required'}
             if result.get('status')=='completed' and str(result.get('response','')).strip()!=READINESS_REPLY:
                 return {**result,'status':'failed','reason':'readiness_unexpected_reply'}
+            return result
+        if job.get('no_retry'):
             return result
         if result.get('capacity_retry_safe') is True:
             return self.capacity_retries(job,result,lambda n:run(*args,audit/f'attempt-{n}'))
@@ -769,12 +868,14 @@ class OfficialPool:
                     db.execute('DELETE FROM official_account_blocks WHERE account_key=? AND reason=? AND created=?',
                                (job['account_key'],*job['timeout_block']))
                 recovered=job.get('readiness_recovery')
-                if (job.get('readiness_probe') and recovered and status=='completed'
-                        and (result.get('response') or '').strip()==READINESS_REPLY):
+                quota_probe = bool(recovered and recovered[0]==QUOTA_LIMIT_BLOCK)
+                verified = (job.get('readiness_probe') and status=='completed'
+                            and (result.get('response') or '').strip()==READINESS_REPLY
+                            and (not quota_probe or result.get('submitted') is True))
+                if verified and recovered:
                     db.execute("DELETE FROM official_account_blocks WHERE account_key=? AND reason=? AND created=?",
                                (job['account_key'],*recovered))
-                if (job.get('readiness_probe') and status=='completed'
-                        and (result.get('response') or '').strip()==READINESS_REPLY):
+                if verified and not quota_probe:
                     db.execute("""INSERT OR IGNORE INTO account_unknown_release(request_id,released,reason)
                         SELECT r.request_id,?,'independent_readiness_verified'
                         FROM requests r JOIN official_jobs j USING(request_id)

@@ -1699,6 +1699,7 @@ const geminiProbeReasons={
   authorization_still_required:'重新读取授权后仍未通过，云端请求未发出',
   verification_required:'Google 要求额外账号验证',
   quota_or_rate_limit:'Gemini 额度不足或频率受限',
+  quota_recheck_deferred:'额度需重新读取，本轮未发送复查。',
   provider_connection_failed:'连接 Google 失败',
   provider_unavailable:'Google 服务暂时不可用',
   timeout_unconfirmed:'等待云端回复超时，结果未确认',
@@ -1724,7 +1725,8 @@ function auditGeminiAccounts(snapshot, channel, quotaData, expected = null) {
     const reasons={
       dispatch_paused:['账号已手动暂停','确认要启用后，在账号页恢复派发。'],
       unresolved_request:['账号有未确认的消息','由对话后台单独处理，本次就绪检查不读取旧对话。'],
-      official_call_blocked:[geminiProbeReasons[current?.block_reason] || '账号当前受限','本轮未发送验活请求。'],
+      official_call_blocked:[geminiProbeReasons[current?.block_reason] || '账号当前受限',
+        current?.block_reason === 'quota_or_rate_limit' ? '额度恢复后，系统会自动复查这个账号。' : '本轮未发送验活请求。'],
       authorization_not_ready:['官方授权未就绪','到账号详情核对授权身份。']};
     reasons.authorization_in_progress=['正在等待本人授权','到 Ubuntu 的授权窗口完成 Google 登录。'];
     if (channel?.production_send_available===false) add('Gemini 官方通道不可用','核对服务连接及账号授权。');
@@ -2144,16 +2146,17 @@ function updateAccountCooldowns() {
 
 setInterval(updateAccountCooldowns, 1000);
 
-function geminiCardStatus(canCall, callBlocked, quota, now) {
+function geminiCardStatus(canCall, callBlocked, quota, now, recovery) {
   if (quota?.status === 'verification_required') return {label:'待 Google 核验', attention:false};
+  if (callBlocked && recovery && quota?.status !== 'authorization_required') {
+    const age = now - quota?.checked_at;
+    const depleted = quota?.status === 'ok' && age >= 0 && age <= 600 &&
+      ['five_hour','weekly'].some(w => quota?.[w]?.remaining_percent === 0);
+    const label = recovery === 'checking' ? '自动复查中' : depleted ? '等待额度恢复' : '等待自动复查';
+    return {label, attention:true, automaticQuotaRecovery:true};
+  }
   if (callBlocked) return {label:'暂不可用', attention:true};
   if (!canCall) return {label:'待确认', attention:false};
-  const age = now - quota?.checked_at;
-  const quotaKnown = quota?.status === 'ok' && Number.isFinite(age) && age >= 0 && age <= 600 &&
-    ['five_hour','weekly'].every(w => {
-      const value = quota?.[w]?.remaining_percent;
-      return Number.isFinite(value) && value >= 0 && value <= 100;
-    });
   return {label:'可调用', attention:false};
 }
 
@@ -2672,8 +2675,10 @@ function renderAccounts() {
       (!channelReadFailed && state.channelStatus?.available === true && state.channelStatus.production_send_available === false) ||
       callState.data?.dispatch_eligible === false;
     const quotaKey = item.key.slice('flow-account-'.length);
+    const quotaRecovery = callState.data?.restriction === 'official_call_blocked' &&
+      callState.data?.block_reason === 'quota_or_rate_limit' && (geminiRow?.checking ? 'checking' : 'waiting');
     const geminiCard = geminiCardStatus(geminiReady, callBlocked,
-      officialQuotaReadFailed ? null : officialQuotaData?.accounts?.[quotaKey], Date.now()/1000);
+      officialQuotaReadFailed ? null : officialQuotaData?.accounts?.[quotaKey], Date.now()/1000, quotaRecovery);
     const flowIssues = flowRow?.issues || [];
     const geminiIssues = issues.filter(issue => !issue.key.startsWith('flow_') && issue.key !== 'quota_stale' && issue.key !== 'gemini_confirmed_verification');
     const windowIssue = flowWindowIssue(item.profile, state.snapshot);
@@ -2717,7 +2722,8 @@ function renderAccounts() {
     const flowBalanceTitle = `积分余额${hasBalance && !item.flow_balance_fresh ? '（上次读取）' : ''}${flowNextCredit ? ' · 下次积分到账 ' + flowNextCredit : ''}`;
     const winRow = (state.snapshot?.flow_coordination?.windows || []).find(w => w.profile === item.profile && w.state === 'result_unknown' && w.task_id);
     const govRelease = winRow ? `<button type="button" class="button button-primary" style="margin-top:6px" data-govern-review="${esc(winRow.task_id)}" data-review-account="${esc(item.key)}">已核对，放行账号</button>` : '';
-    const geminiVerify = (geminiRow && geminiRow.status !== 'ready' && geminiRow.status !== 'queue') ? `<button type="button" class="button button-light" style="margin-top:6px" data-gemini-verify>开始 Gemini 验证</button>` : '';
+    const geminiVerify = (geminiRow && geminiRow.status !== 'ready' && geminiRow.status !== 'queue' && !geminiCard.automaticQuotaRecovery)
+      ? `<button type="button" class="button button-light" style="margin-top:6px" data-gemini-verify>开始 Gemini 验证</button>` : '';
     const removeGemini = item.gemini_registered && !item.gemini_removed
       ? `<button class="button button-light" type="button" data-remove-gemini="${accountKey}" aria-label="从 Gemini 号池删除 ${esc(identity)}"${item.gemini_busy ? ' disabled title="该账号正在处理 Gemini 请求"' : ''}>删除 Gemini 账号</button>` : '';
     const activeFlowTask = ownFlow.some(task => ['queued','running'].includes(task.status)
