@@ -1531,7 +1531,7 @@ function renderAccountInsights(snapshot, target) {
     : eligible == null ? '状态待核对' : eligible < geminiTotal ? `${amount(geminiTotal - eligible)} 个未就绪` : '';
   const cards = [
     {name:'Flow', service:'FLOW', ready:flowReady, total:flowTotal, known:flowKnown, label:flowLabel,
-      metric:{value:amount(usableBalance), label:'就绪积分', note:`全池总余额 ${amount(flow?.pool_balance)}`, change:`${flowDailyCreditLabel}/账号`}},
+      metric:{value:amount(usableBalance), label:'就绪积分', note:`全池总余额 ${amount(flow?.pool_balance)}`}},
     {name:'Gemini', service:'GEMINI', ready:eligible, total:geminiTotal, known:eligible!=null, label:geminiLabel,
       metric:{value:latency, unit:latency==='—' ? '' : '秒', label:'平均耗时', note:'每账号取最近一次成功记录'}},
     {name:'Music', service:'MUSIC', ready:musicReady, total:musicTotal, known:musicKnown, label:musicLabel,
