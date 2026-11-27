@@ -573,7 +573,8 @@ class Console:
                     try:
                         balance = await asyncio.wait_for(
                             read_balance(account, pw, include_details=True, incident_root=self.root), timeout=20)
-                        self.insights.record(profile, balance['balance'], next_credit_date=balance.get('next_credit_date'))
+                        self.insights.record(profile, balance['balance'], next_credit_date=balance.get('next_credit_date'),
+                                             daily_credits_remaining=balance.get('daily_credits_remaining'))
                     except BalanceReadDeferred:
                         return profile
                     except BalancePanelUnavailable as exc:

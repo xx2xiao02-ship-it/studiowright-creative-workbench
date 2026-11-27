@@ -462,6 +462,9 @@ def account_rows(state):
         balance = info.get("balance")
         if isinstance(balance, bool) or not isinstance(balance, (int, float)) or not math.isfinite(balance) or balance < 0:
             balance = None
+        daily_credits = info.get("daily_credits_remaining")
+        if balance is None or type(daily_credits) is not int or not 0 <= daily_credits <= balance:
+            daily_credits = None
         network = row.get('exit_info')
         port = network.get('port') if isinstance(network, dict) else None
         exit_info = ({'port': port, 'public_ip': clean_text(network.get('public_ip'), 64) or None,
@@ -473,6 +476,7 @@ def account_rows(state):
                      "flow_login": "verified" if row.get("state") == "verified" else "unknown",
                      "flow_removed": row.get("flow_removed") == 1,
                      "flow_health": health, "flow_balance": balance,
+                     "flow_daily_credits_remaining": daily_credits,
                      "flow_preflight_reasons": preflight,
                      "flow_page_incident": ({'id': incident['id'], 'phase': incident.get('phase'),
                                              'has_screenshot': incident.get('has_screenshot') == 1,
