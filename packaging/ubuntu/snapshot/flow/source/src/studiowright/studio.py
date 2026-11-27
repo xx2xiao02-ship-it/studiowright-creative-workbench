@@ -487,14 +487,17 @@ class Studio:
         }
 
     async def _fail(self, job_id: str, exc: BaseException, site: str, *, page=None) -> None:
-        """Record a failed job with a screenshot of the page it failed on."""
+        """Record a failed job and capture the page for provider-side diagnostics."""
         job = self.store.job(job_id)
         result = json.loads(job["result"]) if job and job["result"] else {}
         params = json.loads(job["params"]) if job and job["params"] else {}
         stage, media = result.get("stage"), result.get("media_ids", [])
         try:
             project_id = job["project_id"] if job else None
-            shot = await self._capture_failure_page(job_id, site, project_id, page)
+            local_input_stop = (site == FLOW_ROOT and stage == "preparing"
+                                and type(exc).__module__ == "foreground_input"
+                                and type(exc).__name__ == "InputNotSubmitted")
+            shot = None if local_input_stop else await self._capture_failure_page(job_id, site, project_id, page)
             detail = f"{type(exc).__name__}: {exc}"
             if shot is not None:
                 detail += f" (screenshot: {shot})"

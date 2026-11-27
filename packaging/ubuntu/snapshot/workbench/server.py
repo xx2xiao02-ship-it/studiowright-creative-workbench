@@ -265,6 +265,8 @@ def task_failure_reason(row):
     known = {
         'pasted_text_mismatch': '提示词粘贴后校验不一致，任务在发送前停止。',
         'prompt_input_timeout': '输入提示词超时，任务未发送。当时的记录未细分粘贴和核对步骤。',
+        'prompt_focus_timeout': '用 Tab 选中 Flow 输入框超时，任务未发送。',
+        'prompt_focus_failed': '用 Tab 选中 Flow 输入框失败，任务未发送。',
         'prompt_prefix_timeout': '提示词试输或清除试输文字超时，未开始粘贴全文，任务未发送。',
         'prompt_prefix_failed': '提示词试输或清除试输文字失败，未开始粘贴全文，任务未发送。',
         'prompt_paste_timeout': '粘贴提示词超时，剪贴板粘贴步骤未完成，任务未发送。',

@@ -43,7 +43,9 @@ TERMINAL_INPUT_STOPS = frozenset((
     'prompt_paste_timeout', 'prompt_paste_failed',
     'prompt_verify_timeout', 'prompt_verify_failed',
 ))
-RETRYABLE_INPUT_STOPS = frozenset(('pre_submit_failed:pointer_not_over_input', 'pre_submit_failed:desktop_keyboard_authorization_timeout', 'window_focus_lost', 'composer_unavailable', 'window_activation_unconfirmed'))
+RETRYABLE_INPUT_STOPS = frozenset(('pre_submit_failed:pointer_not_over_input', 'pre_submit_failed:desktop_keyboard_authorization_timeout',
+                                  'window_focus_lost', 'composer_unavailable', 'window_activation_unconfirmed',
+                                  'prompt_focus_timeout', 'prompt_focus_failed'))
 WAITING_FOR_PROXY = '等待已确认空闲的专属代理。分配后，原同步任务会自动继续核对。'
 BRIDGE_LEGACY_ID = 'kbnibljeinmjmmpholicjkaiehmilbbk'
 BRIDGE_ID = 'aaipdbnbbgeadlodajhcobjmomnemclj'

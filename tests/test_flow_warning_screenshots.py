@@ -15,6 +15,7 @@ sys.path[:0] = [str(ROOT / name) for name in ('windows', 'ubuntu/snapshot/workbe
                                             'ubuntu/snapshot/flow/source/src')]
 from flow_warning_archive import current_window_screenshots, purge_reviewed_screenshots, read_png, records, sync_index, view_screenshot_once
 from flow_warning_desktop import capture_name, sync_once
+from foreground_input import InputNotSubmitted
 
 try:
     from studiowright.studio import ImageRequest, VideoRequest, Studio, FLOW_ROOT, PlaywrightTimeout, SubmissionRejectedUnusual
@@ -31,6 +32,19 @@ JOB_ID = '123456789abc'
 
 @unittest.skipIf(Studio is None, 'Flow console runtime unavailable')
 class Capture(unittest.IsolatedAsyncioTestCase):
+    async def test_local_flow_input_timeout_records_error_without_screenshot(self):
+        job = {'project_id': 'project-a', 'params': '{"origin_console_task":"task-a","count":1}',
+               'result': '{"stage":"preparing","media_ids":[]}'}
+        studio = Studio.__new__(Studio)
+        studio.store = SimpleNamespace(job=Mock(return_value=job), update_job=Mock())
+        studio._capture_failure_page = AsyncMock()
+        await studio._fail(JOB_ID, InputNotSubmitted('prompt_paste_timeout'), FLOW_ROOT)
+        studio._capture_failure_page.assert_not_awaited()
+        saved = studio.store.update_job.call_args.kwargs
+        self.assertEqual(saved['status'], 'failed')
+        self.assertEqual(saved['error'], 'InputNotSubmitted: prompt_paste_timeout')
+        self.assertNotIn('warning_screenshot', saved['result'])
+
     async def test_generation_saves_failure_before_cooldown_stops_chrome(self):
         for request, screenshot_available in ((ImageRequest('test', project='project-a'), True),
                                                (VideoRequest('test', project='project-a'), True),

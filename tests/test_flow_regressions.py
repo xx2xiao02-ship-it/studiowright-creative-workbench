@@ -105,9 +105,22 @@ class FlowPromptVerification(unittest.IsolatedAsyncioTestCase):
         with patch('foreground_input.asyncio.timeout_at', wraps=asyncio.timeout_at) as timeout:
             await self.submit()
         deadlines = [call.args[0] for call in timeout.call_args_list]
-        self.assertEqual(len(deadlines), 3)
+        self.assertEqual(len(deadlines), 4)
         self.assertEqual(len(set(deadlines)), 1)
         self.send.assert_awaited_once()
+
+    async def test_tab_focus_is_included_before_typing_or_paste(self):
+        async def stalled_focus(*_):
+            await asyncio.Event().wait()
+
+        self.driver.composer_ready_cdp.side_effect = stalled_focus
+        with patch('foreground_input.FLOW_PROMPT_TIMEOUT', .2):
+            with self.assertRaisesRegex(InputNotSubmitted, '^prompt_focus_timeout$'):
+                await self.submit()
+        self.driver.composer_text.assert_awaited_once()
+        self.driver.copy_prompt_and_paste.assert_not_awaited()
+        self.checkpoint.assert_not_awaited()
+        self.send.assert_not_awaited()
 
     async def test_paste_timeout_never_enters_verification_or_submission(self):
         self.prompt = '字'

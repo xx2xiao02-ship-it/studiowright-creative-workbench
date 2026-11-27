@@ -7,7 +7,7 @@ import asyncio
 import json
 import random
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -151,7 +151,7 @@ FLOW_PROMPT_TIMEOUT = 4.0
 async def _flow_prompt_step(step, deadline, record):
     loop = asyncio.get_running_loop()
     started = loop.time()
-    record('flow_prompt_step_started', step=step,
+    record(f'flow_prompt_{step}_started',
            remaining_seconds=round(max(0, deadline - started), 3))
     try:
         async with asyncio.timeout_at(deadline):
@@ -161,16 +161,16 @@ async def _flow_prompt_step(step, deadline, record):
             if loop.time() >= deadline:
                 raise TimeoutError
     except InputNotSubmitted as exc:
-        record('flow_prompt_step_failed', step=step, reason=str(exc))
+        record(f'flow_prompt_{step}_failed', reason=str(exc))
         raise
     except Exception as exc:
         outcome = 'timeout' if isinstance(exc, TimeoutError) else 'failed'
         reason = f'prompt_{step}_{outcome}'
-        record('flow_prompt_step_failed', step=step, reason=reason,
+        record(f'flow_prompt_{step}_failed', reason=reason,
                error=type(exc).__name__)
         raise InputNotSubmitted(reason) from exc
     else:
-        record('flow_prompt_step_completed', step=step,
+        record(f'flow_prompt_{step}_completed',
                elapsed_ms=round((loop.time() - started) * 1000))
 
 
@@ -200,12 +200,10 @@ async def _prepare_flow_prefix(driver, page, composer, target, prompt, record):
         if await driver.composer_text(page, composer) not in ('', '\n'):
             raise InputNotSubmitted('flow_prefix_deletion_incomplete')
 
-async def enter_hybrid_prompt(driver, page, composer, target, prompt, record):
-    deadline = asyncio.get_running_loop().time() + FLOW_PROMPT_TIMEOUT
+async def enter_hybrid_prompt(driver, page, composer, target, prompt, record, *, deadline):
     async with _flow_prompt_step('prefix', deadline, record):
         await _prepare_flow_prefix(driver, page, composer, target, prompt, record)
     async with _flow_prompt_step('paste', deadline, record):
-        record('clipboard_paste_started', characters=len(prompt))
         await driver.copy_prompt_and_paste(page, composer, target, prompt)
     async with _flow_prompt_step('verify', deadline, record):
         await _verify_prompt(driver, page, composer, target, prompt)
@@ -232,6 +230,14 @@ async def paste_and_submit(*, queue, driver, page, composer, target, prompt,
             target=target, prompt=prompt, checkpoint=checkpoint, submit=submit, hybrid=hybrid)
 
 
+async def _require_empty_prompt_target(driver, page, composer):
+    from task_coordinator import preparation_safe
+    if not preparation_safe():
+        raise InputNotSubmitted('submission_boundary_already_recorded')
+    if await driver.composer_text(page, composer) not in ('', '\n'):
+        raise InputNotSubmitted('composer_not_empty')
+
+
 async def paste_and_submit_reserved(*, driver, page, composer, target, prompt,
                                     checkpoint, submit, hybrid=False):
     """Execute while the caller holds the shared foreground queue lease."""
@@ -241,32 +247,35 @@ async def paste_and_submit_reserved(*, driver, page, composer, target, prompt,
     prompt = prompt.replace('\r\n', '\n')
     if not isinstance(target, Target) or target.process_id <= 0 or target.window_id <= 0:
         raise InputNotSubmitted('invalid_target')
-    from task_coordinator import record, preparation_safe
+    from task_coordinator import record
     await _pacing_wait(record, target.account_key)
     mode = "hybrid" if hybrid else choose_prompt_input(prompt)
     try:
-            # Retry focus only; prompt input and submission stay single-shot.
-            for attempt in range(3):
-                if not preparation_safe():
-                    raise InputNotSubmitted('submission_boundary_already_recorded')
-                if await driver.composer_text(page, composer) not in ('', '\n'):
-                    raise InputNotSubmitted('composer_not_empty')
-                try:
-                    if not await driver.activate_and_confirm(target):
-                        raise InputNotSubmitted('window_activation_unconfirmed')
-                    ready = await (driver.composer_ready_cdp(page, composer, target)
-                                   if mode in ('cdp_type', 'hybrid')
-                                   else driver.composer_ready(page, composer, target))
-                    if not ready:
-                        raise InputNotSubmitted('composer_unavailable')
-                    break
-                except Exception as exc:
-                    record('input_preparation_recovery',attempt=attempt+1,error=type(exc).__name__)
-                    if attempt==2:
-                        raise
-                    await asyncio.sleep(.6)
+            await _require_empty_prompt_target(driver, page, composer)
+            # The editor has answered. Start the Flow budget before any activation or Tab.
+            deadline = asyncio.get_running_loop().time() + FLOW_PROMPT_TIMEOUT if hybrid else None
+            focus_step = _flow_prompt_step('focus', deadline, record) if hybrid else nullcontext()
+            async with focus_step:
+                # Retry focus only; prompt input and submission stay single-shot.
+                for attempt in range(3):
+                    if attempt:
+                        await _require_empty_prompt_target(driver, page, composer)
+                    try:
+                        if not await driver.activate_and_confirm(target):
+                            raise InputNotSubmitted('window_activation_unconfirmed')
+                        ready = await (driver.composer_ready_cdp(page, composer, target)
+                                       if mode in ('cdp_type', 'hybrid')
+                                       else driver.composer_ready(page, composer, target))
+                        if not ready:
+                            raise InputNotSubmitted('composer_unavailable')
+                        break
+                    except Exception as exc:
+                        record('input_preparation_recovery',attempt=attempt+1,error=type(exc).__name__)
+                        if attempt==2:
+                            raise
+                        await asyncio.sleep(.6)
             if hybrid:
-                await enter_hybrid_prompt(driver, page, composer, target, prompt, record)
+                await enter_hybrid_prompt(driver, page, composer, target, prompt, record, deadline=deadline)
                 record('hybrid_input_verified', characters=len(prompt))
             else:
                 # Empty contenteditable paragraphs such as <p><br></p> expose

@@ -1014,6 +1014,11 @@ function taskFailureMarkup(item) {
     original_video_grid_download:'从项目列表下载原片',original_download_retry:'重新下载原文件',original_download_recovered:'原文件下载恢复成功',refresh_original_download_address:'刷新原作品下载地址',window_retained:'保留固定窗口'};
   labels.login_page_recheck='重新核对原账号登录页面';
   labels.confirmed_rejection_released='核对原提交已被拒绝，释放旧任务占用';
+  for (const [step, label] of Object.entries({focus:'选中输入框', prefix:'试输提示词', paste:'粘贴提示词', verify:'核对提示词'})) {
+    labels[`flow_prompt_${step}_started`] = `开始${label}`;
+    labels[`flow_prompt_${step}_completed`] = `${label}完成`;
+    labels[`flow_prompt_${step}_failed`] = `${label}未完成`;
+  }
   const events=(item.self_recovery || []).filter(e=>labels[e.action]);
   const reason = item.failure_reason || '';
   const explanation = /PUBLIC_ERROR_UNUSUAL_ACTIVITY/i.test(reason)
