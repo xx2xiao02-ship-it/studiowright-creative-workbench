@@ -5267,20 +5267,20 @@ function renderOfficialQuota() {
   const advanced = data?.advanced_pool;
   const advancedDispatch = state.channelStatus?.dispatch?.advanced_pool;
   const advancedRows = Object.entries(advanced?.accounts || {});
-  const hydrogenRows = advancedRows.filter(([,row]) => row.models?.includes(hydrogenMedium));
   const now = Date.now()/1000;
+  const freshRows = rows.filter(([,row])=>now-row.checked_at >= 0 && now-row.checked_at <= 600);
   const sharedWindowMarkup = ['five_hour','weekly'].map(window=>{
-    const values = hydrogenRows
-      .filter(([,row])=>now-row.checked_at >= 0 && now-row.checked_at <= 600)
+    const values = freshRows
       .map(([,row])=>savedQuotaValue(row,window))
       .filter(value=>value!==null);
     const average = values.length ? Math.round(values.reduce((sum,value)=>sum+value,0)/values.length*100)/100 : null;
     const title = window === 'five_hour' ? '5 小时' : '每周';
     const meter = average === null ? `role="img" aria-label="${title}额度待读取"`
       : `role="progressbar" aria-label="${title}平均剩余额度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${average}"`;
-    return `<div class="quota-shared-window"><span>${title}额度</span><strong>${average === null ? '待读取' : number(average)}${average === null ? '' : '<small>平均剩余</small>'}</strong><div class="quota-track${average === null ? ' is-unknown' : ''}" ${meter}><i data-quota-fill="${average ?? 0}"></i></div><em>${values.length} / ${hydrogenRows.length} 个账号已读</em></div>`;
+    const coverage = rows.length ? `<em>${values.length} / ${rows.length} 个账号已读</em>` : '';
+    return `<div class="quota-shared-window"><span>${title}额度</span><strong>${average === null ? '待读取' : number(average)}${average === null ? '' : '<small>平均剩余</small>'}</strong><div class="quota-track${average === null ? ' is-unknown' : ''}" ${meter}><i data-quota-fill="${average ?? 0}"></i></div>${coverage}</div>`;
   }).join('');
-  const sharedTopMarkup = advanced ? `<article class="quota-shared-card"><div class="quota-shared-heading"><strong>HY 默认池额度</strong><span>Gemini Models 共享</span></div><div class="quota-shared-windows">${sharedWindowMarkup}</div><p>按已开通 HY 中档且近期读到额度的账号取平均。</p></article>` : '';
+  const sharedTopMarkup = `<article class="quota-shared-card"><div class="quota-shared-heading"><strong>Gemini 共享额度</strong><span>近 10 分钟读数</span></div><div class="quota-shared-windows">${sharedWindowMarkup}</div><p>同一账号的各 Gemini 模型共用额度。</p></article>`;
   const advancedQuotaMarkup = advancedRows.length ? `
     <div class="quota-table-wrap">
       <table aria-label="高级模型账号额度">
@@ -5300,7 +5300,7 @@ function renderOfficialQuota() {
   const coverage = refreshing ? `正在读取 ${known} / ${total} 个账号` : known ? `已保存 ${known} / ${total} 个账号${known<total ? ' · 汇总仅含已读账号' : ''}` : '额度暂未获取';
   target.setAttribute('aria-busy',String(refreshing));
   $('geminiSharedQuota').innerHTML = sharedTopMarkup;
-  $('geminiQuotaBreakdown').innerHTML = `<div class="quota-footer"><div class="quota-source"><span>Gemini Models：${esc(coverage)}${checked.length ? ` · 更新于 ${esc(dateTime(Math.max(...checked)))}` : ''}</span></div><button type="button" class="quota-refresh" data-quota-action="refresh" ${refreshing || officialQuotaRequest ? 'disabled' : ''}>${refreshing ? '额度读取中…' : '刷新 Gemini 额度'}</button></div><details class="quota-details" ${opened ? 'open' : ''}><summary data-quota-action="details">账号与普通 Gemini 额度明细<span>查看账号剩余与恢复时间</span></summary>${advancedQuotaMarkup}<div class="quota-table-wrap"><table><thead><tr><th>账号</th><th>5 小时剩余</th><th>每周剩余</th><th>状态 / 最近恢复</th></tr></thead><tbody>${rowMarkup || `<tr><td colspan="4">${refreshing ? '正在读取额度…' : '额度暂未获取'}</td></tr>`}</tbody></table></div></details>`;
+  $('geminiQuotaBreakdown').innerHTML = `<div class="quota-footer"><div class="quota-source"><span>Gemini Models：${esc(coverage)}${checked.length ? ` · 更新于 ${esc(dateTime(Math.max(...checked)))}` : ''}</span></div><button type="button" class="quota-refresh" data-quota-action="refresh" ${refreshing || officialQuotaRequest ? 'disabled' : ''}>${refreshing ? '额度读取中…' : '刷新 Gemini 额度'}</button></div><details class="quota-details" ${opened ? 'open' : ''}><summary data-quota-action="details">账号额度明细<span>查看账号剩余与恢复时间</span></summary>${advancedQuotaMarkup}<div class="quota-table-wrap"><table><thead><tr><th>账号</th><th>5 小时剩余</th><th>每周剩余</th><th>状态 / 最近恢复</th></tr></thead><tbody>${rowMarkup || `<tr><td colspan="4">${refreshing ? '正在读取额度…' : '额度暂未获取'}</td></tr>`}</tbody></table></div></details>`;
   target.querySelectorAll('[data-quota-fill]').forEach(meter=>{meter.style.width=Number(meter.dataset.quotaFill)+'%';});
   target.querySelector('[data-quota-action="refresh"]').addEventListener('click',()=>refreshOfficialQuota(true));
   if (focused) target.querySelector(`[data-quota-action="${focused}"]`)?.focus({preventScroll:true});

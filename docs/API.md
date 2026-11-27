@@ -125,7 +125,7 @@ print(submission["model"])
 
 Google Antigravity 公告将于 2026 年 11 月 30 日移除 Gemini 3.8 Flash。Flash 保底受供应商实际可用性约束。[Google 模型说明](https://antigravity.google/docs/models?app=antigravity#reasoning-model)
 
-**账号与额度监控**可在工作台「操作台 → HY 默认池额度」查看。总览只统计已开通 Hydrogen 中档的账号，对每个窗口的近期已读剩余比例取平均。工作台本机面板端口 `18920` 的 `GET /api/channel-status` 返回默认文字模型 `dispatch.model` 与 `dispatch.advanced_pool`。`GET /api/official-quota` 返回各账号的 5 小时和每周剩余与恢复时间。`advanced_pool.quota_scope` 为 `gemini_models_shared`，表示这些数值来自各账号的官方 Gemini Models 共享额度。`advanced_pool.windows.*.total_remaining_percent` 是可读账号剩余百分比的合计，`average_remaining_percent` 是账号平均剩余。两个监控接口由面板提供，程序调用端口 `18922` 提供对话提交及结果查询。可读的高级账号每 5 分钟刷新。
+**账号与额度监控**可在工作台「操作台 → Gemini 共享额度」查看。总览覆盖已登记的 Gemini 账号。5 小时和每周额度分别统计最近 10 分钟内读到的账号平均剩余比例，并显示各自的已读账号数。工作台本机面板端口 `18920` 的 `GET /api/channel-status` 返回默认文字模型 `dispatch.model` 与 `dispatch.advanced_pool`。`GET /api/official-quota` 返回各账号的 5 小时和每周剩余与恢复时间。`advanced_pool.quota_scope` 为 `gemini_models_shared`，表示这些数值来自各账号的官方 Gemini Models 共享额度。`advanced_pool.windows.*.total_remaining_percent` 是可读账号剩余百分比的合计，`average_remaining_percent` 是账号平均剩余。两个监控接口由面板提供，程序调用端口 `18922` 提供对话提交及结果查询。可读的高级账号每 5 分钟刷新。
 
 接着问时沿用 `conversation_id`，为新消息生成新的请求编号。原账号受限时续聊暂缓。自动分配的新请求仅在确认还未发送时允许切换账号。查回复用下方「结果与下载」中的 Gemini 查询接口。
 

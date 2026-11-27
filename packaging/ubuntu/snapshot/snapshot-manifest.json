@@ -133,7 +133,7 @@
   "workbench/activation.py": "419f52880f8da0b436c9536800a0b256bb8776f83737337f04bb69facd2d14fe",
   "workbench/activation_browser.py": "6e3fb1ad7d0ac6e58051f1f7a71efbb55d9c9a894871f88ba4a9eaa728727eb0",
   "workbench/api-docs.js": "57a884669b3e04959754ce6add05953ce9b6e4576c457527c803afb77eed6fc1",
-  "workbench/app.js": "18a8c098396b924d16e74d96505d81e1de3888910b1c1f9e0f51b6219f6dac46",
+  "workbench/app.js": "ae763c3fcb987efb8b535755a02862a6f636a3cb3fd37ce48c9576c93523606a",
   "workbench/boot_flow_readiness.py": "9c7776799b3676c1d35b01bdb826caa5bb7008466dbaa93d6998b7643fe08303",
   "workbench/channel_status.py": "dd57b411bab2da7da4181dc3f337698d2e02bd4d447fab97b0170e6df752002f",
   "workbench/crash_recovery.py": "5ec9681a28a218815b1d0d313f10298541fdd4a42474c283b47611efe324952d",

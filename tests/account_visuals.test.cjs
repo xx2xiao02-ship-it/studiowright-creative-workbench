@@ -208,7 +208,7 @@ test('Flow card distinguishes missing bindings from automatic credit updates', (
   assert.notEqual(vm.runInContext("flowAccountReason(account,{},row,'binding').showOnCard",context),true);
 });
 
-test('overview only averages the fresh shared quotas of the default HY pool', () => {
+test('overview averages each fresh shared quota across the whole Gemini account pool', () => {
   const now = 1800000000;
   const flow = {};
   const shared = {};
@@ -219,24 +219,34 @@ test('overview only averages the fresh shared quotas of the default HY pool', ()
     contains: () => false,
     setAttribute() {}
   };
+  const accounts = {
+    hydrogen: {status:'ok', checked_at:now-30,
+      five_hour:{remaining_percent:100}, weekly:{remaining_percent:60}},
+    neon: {status:'ok', checked_at:now-60, five_hour:{remaining_percent:75}},
+    carbon: {status:'ok', checked_at:now-60,
+      five_hour:{remaining_percent:50}, weekly:{remaining_percent:30}},
+    flash: {status:'ok', checked_at:now-60,
+      five_hour:{remaining_percent:0}, weekly:{remaining_percent:100}},
+    stale: {status:'ok', checked_at:now-601,
+      five_hour:{remaining_percent:90}, weekly:{remaining_percent:100}},
+    unread: {status:'unavailable'}
+  };
   const context = vm.createContext({
     $: id => ({geminiQuotaOverview:target, flowSuccessOverview:flow, geminiSharedQuota:shared, geminiQuotaBreakdown:breakdown})[id],
     document: {},
     state: {},
-    hydrogenMedium: 'gemini-4-hydrogen-medium',
+    dateTime: value => String(value),
     Date: {now: () => now * 1000},
     officialQuotaReadFailed: false,
     officialQuotaRequest: null,
     officialQuotaData: {
+      accounts,
       advanced_pool: {
         total_accounts: 3,
         accounts: {
-          first: {status:'ok', checked_at:now-30, models:['gemini-4-hydrogen-medium','gemini-4-neon-high'],
-            five_hour:{remaining_percent:100}, weekly:{remaining_percent:60}},
-          second: {status:'ok', checked_at:now-60, models:['gemini-4-neon-high'],
-            five_hour:{remaining_percent:75}},
-          stale: {status:'ok', checked_at:now-601, models:['gemini-4-hydrogen-medium'],
-            five_hour:{remaining_percent:0}, weekly:{remaining_percent:100}}
+          hydrogen: {...accounts.hydrogen,models:['gemini-4-hydrogen-medium','gemini-4-neon-high']},
+          neon: {...accounts.neon,models:['gemini-4-neon-high']},
+          carbon: {...accounts.carbon,models:['gemini-4-carbon-medium']}
         }
       }
     }
@@ -245,11 +255,14 @@ test('overview only averages the fresh shared quotas of the default HY pool', ()
   vm.runInContext('renderOfficialQuota()', context);
   assert.match(flow.innerHTML, /FLOW · 图片 \/ 视频成功率/);
   assert.equal((shared.innerHTML.match(/class="quota-shared-card"/g) || []).length, 1);
-  assert.match(shared.innerHTML, /HY 默认池额度[^]*?Gemini Models 共享/);
-  assert.match(shared.innerHTML, /5 小时额度<\/span><strong>100%[^]*?aria-valuenow="100"[^]*?>1 \/ 2 个账号已读/);
-  assert.match(shared.innerHTML, /每周额度<\/span><strong>60%[^]*?aria-valuenow="60"[^]*?>1 \/ 2 个账号已读/);
-  assert.doesNotMatch(shared.innerHTML, /87\.50%|175%|120%/);
-  assert.match(breakdown.innerHTML, /账号与普通 Gemini 额度明细/);
+  assert.match(shared.innerHTML, /Gemini 共享额度[^]*?近 10 分钟读数/);
+  assert.match(shared.innerHTML, /5 小时额度<\/span><strong>56\.25%[^]*?aria-valuenow="56\.25"[^]*?>4 \/ 6 个账号已读/);
+  assert.match(shared.innerHTML, /每周额度<\/span><strong>63\.33%[^]*?aria-valuenow="63\.33"[^]*?>3 \/ 6 个账号已读/);
+  assert.match(breakdown.innerHTML, /账号额度明细/);
+  context.officialQuotaReadFailed = true;
+  vm.runInContext('renderOfficialQuota()', context);
+  assert.equal((shared.innerHTML.match(/<strong>待读取<\/strong>/g) || []).length, 2);
+  assert.doesNotMatch(shared.innerHTML, /aria-valuenow|个账号已读/);
 });
 
 test('Gemini account avatars distinguish Neon and Carbon independently', () => {
