@@ -32,6 +32,7 @@ from music_recovery import DATABASE as MUSIC_DATABASE, MUSIC_HOME
 
 ROOT = Path(__file__).resolve().parent
 FLOW_READINESS_LOCK = threading.Lock()
+FLOW_RECOVERY_RECHECK_SECONDS = 300
 LOGGER = logging.getLogger(__name__)
 MAX_RESPONSE = 16 * 1024 * 1024
 APPLY_LIBRARY_TAGS = r'''
@@ -633,12 +634,14 @@ def check_library_storage_target(current, requested, required_bytes):
             'minimum_bytes': minimum, 'active': False}
 
 
-def readiness_repair_accounts(payload, checks):
+def readiness_repair_accounts(payload, checks, *, automatic=False):
     """Only idle, enabled, unready accounts may be changed by the circle."""
     busy = set(payload.get('busy', []))
     return [a for a in payload['accounts']
             if a['repairable'] and a['profile'] not in busy and not a['review_task']
-            and checks.get(a['profile']) not in ('ok', 'login', 'verification_required')]
+            and checks.get(a['profile']) not in ('ok', 'login', 'verification_required')
+            and (not automatic or (a.get('projects') and not a.get('automatic_recovery_blocked')
+                                   and checks.get(a['profile']) is not None))]
 
 
 class Sources:
@@ -655,10 +658,11 @@ class Sources:
         self.gemini_source = gemini_source
         self.timeout = timeout
         self._automatic_balance_after = {}
+        self._automatic_recovery_after = {}
         # Reuse the original console's local session in memory only.
         self.opener = build_opener(ProxyHandler({}), NoRedirect(), HTTPCookieProcessor(http.cookiejar.CookieJar()))
 
-    def read(self, service, path, *, retry_transient=False):
+    def read(self, service, path, *, transient_retries=0):
         if service == "gemini":
             return None, 'Gemini 使用官方 CLI 通道，由工作台直接调用；不探测独立后台。'
         if service not in self.PATHS or path not in self.PATHS[service]:
@@ -667,20 +671,18 @@ class Sources:
         request = Request(url, method="GET", headers={"Accept": "application/json"})
         started = time.monotonic()
         value, message, failure = self._read_once(request, self.timeout)
-        if not retry_transient or failure is None:
+        if not transient_retries or failure is None:
             return value, message
 
-        elapsed = time.monotonic() - started
-        if failure in {'timeout', 'connection', 'http_500', 'http_502', 'http_503', 'http_504'}:
-            LOGGER.warning('Flow account state read failed (%s, %.2fs); retrying once before submission.',
-                           failure, elapsed)
+        for _ in range(transient_retries):
+            if failure not in {'timeout', 'connection', 'http_500', 'http_502', 'http_503', 'http_504'}:
+                break
+            LOGGER.info('Flow connection retry (%s).', failure)
             time.sleep(0.25)
-            started = time.monotonic()
             value, message, failure = self._read_once(request, max(self.timeout, 6))
             if failure is None:
                 return value, message
-            elapsed = time.monotonic() - started
-        LOGGER.warning('Flow account state unavailable before submission (%s, %.2fs).', failure, elapsed)
+        LOGGER.warning('Flow account state unavailable (%s, %.2fs).', failure, time.monotonic() - started)
         return value, message
 
     def _read_once(self, request, timeout):
@@ -999,8 +1001,8 @@ class Sources:
 
     def flow_readiness(self, repair=False, manual_review=None, automatic=False, account_key=None, prepare_project=None):
         """Read current pages; only the explicit POST may repair or release a hold."""
-        from flow_readiness_recovery import generation_evidence, operator_dispatch_paused
-        state, _ = self.read("flow", "/api/state")
+        from flow_readiness_recovery import RECOVERY_ATTEMPTS, RETRYABLE_PAGE_STATES, generation_evidence, operator_dispatch_paused
+        state, _ = self.read("flow", "/api/state", transient_retries=RECOVERY_ATTEMPTS - 1)
         if not state or state.get('test') is True:
             raise ValueError('flow_not_connected')
         accounts = account_rows(state)
@@ -1014,9 +1016,13 @@ class Sources:
         busy = set(active_tasks)
         busy.update(w.get('profile') for w in coordination.get('windows', [])
                     if w.get('state') in ('preparing','submitting','submitted','generated','downloading'))
+        auto_blocked = {row.get('profile') for row in state.get('remote_logins', [])}
+        auto_blocked.update(p for p, window in windows.items() if window.get('state') == 'needs_verification')
         payload = {'accounts': [{'profile': a['profile'], 'key': a['key'], 'email': a['email'],
                                 'projects': [p['source_id'] for p in projects if p['source_profile']==a['profile']],
                                 'review_task': windows.get(a['profile'],{}).get('task_id') if windows.get(a['profile'],{}).get('state')=='result_unknown' else None,
+                                'automatic_recovery_blocked': (a['profile'] in auto_blocked
+                                                               or bool(a.get('flow_operator_paused'))),
                                 'repairable': (a['flow_login']=='verified' and not a['flow_page_incident']
                                                and a['flow_risk_known'] and not a['flow_risk_paused']
                                                and a['flow_pacing_known'] and not a['flow_cooling'])}
@@ -1059,7 +1065,7 @@ class Sources:
                 before_checks = json.loads(before.stdout)
                 if not isinstance(before_checks, dict):
                     raise ValueError('invalid_readiness_result')
-                recovery_payload['accounts'] = readiness_repair_accounts(payload, before_checks)
+                recovery_payload['accounts'] = readiness_repair_accounts(payload, before_checks, automatic=automatic)
                 for account in recovery_payload['accounts']:
                     if before_checks.get(account['profile']) == 'busy':
                         account['refresh_after_busy'] = True
@@ -1078,8 +1084,8 @@ class Sources:
                 if automatic:
                     now = time.monotonic()
                     self._automatic_recovery_after = {
-                        profile: until for profile, until in getattr(self, '_automatic_recovery_after', {}).items()
-                        if until > now
+                        profile: outcome for profile, outcome in self._automatic_recovery_after.items()
+                        if outcome[0] > now
                     }
                     recovery_payload['accounts'] = [
                         a for a in recovery_payload['accounts']
@@ -1093,11 +1099,6 @@ class Sources:
                     initial = repairs.get(profile, {})
                     repairs[profile] = {**initial, **result,
                                         'actions': initial.get('actions', []) + result.get('actions', [])}
-                if automatic:
-                    self._automatic_recovery_after.update({
-                        profile: time.monotonic() + 300 for profile, item in repairs.items()
-                        if item.get('page') != 'busy'
-                    })
             if manual_review:
                 profile = payload['accounts'][0]['profile']
                 released = 'release_review' in repairs.get(profile, {}).get('actions', [])
@@ -1108,7 +1109,7 @@ class Sources:
                     except (OSError, ValueError, sqlite3.Error):
                         pass  # Desktop sync or the next archive read retries the cleanup.
                 return {'released':released}
-            state, _ = self.read('flow','/api/state')
+            state, _ = self.read('flow', '/api/state', transient_retries=RECOVERY_ATTEMPTS - 1)
             if not state or state.get('test') is True:
                 raise ValueError('flow_not_connected')
             coordination = state.get('coordination') or {}
@@ -1131,6 +1132,25 @@ class Sources:
         for profile, item in repairs.items():
             if checks.get(profile) in ('binding','project','editor','load_failed','unconfirmed') and item.get('page') in ('draft','login','verification_required','flow_landing','overlay'):
                 checks[profile] = item['page']
+        recovery_clock = time.monotonic()
+        for profile, item in repairs.items():
+            page = checks.get(profile)
+            if (item.get('attempts') == RECOVERY_ATTEMPTS
+                    and item.get('page') in RETRYABLE_PAGE_STATES and page in RETRYABLE_PAGE_STATES):
+                self._automatic_recovery_after[profile] = (recovery_clock + FLOW_RECOVERY_RECHECK_SECONDS, page)
+            elif automatic and page in ('ok', 'draft', 'login', 'verification_required'):
+                self._automatic_recovery_after[profile] = (recovery_clock + FLOW_RECOVERY_RECHECK_SECONDS, None)
+            elif page == 'ok':
+                self._automatic_recovery_after.pop(profile, None)
+
+        recovery = {}
+        for account in readiness_repair_accounts(payload, checks, automatic=True):
+            profile = account['profile']
+            retry_at, failed_page = self._automatic_recovery_after.get(profile, (0, None))
+            if retry_at <= recovery_clock:
+                recovery[profile] = 'pending'
+            else:
+                recovery[profile] = 'failed' if failed_page == checks[profile] else 'waiting'
         if repair:
             eligible = {account['profile'] for account in payload['accounts']
                         if account['repairable'] and not account['review_task']}
@@ -1158,6 +1178,7 @@ class Sources:
                     pass  # A successful page recheck is independent of balance availability.
         now = time.time()
         return {'accounts':checks,'checked_at':now,'repairs':repairs,'active_tasks':active_tasks,
+                'recovery':recovery,
                 'busy_rechecked': [p for p, page in checks.items() if page == 'busy' and p not in active_tasks
                                    and before_checks.get(p) == 'busy'] if repair else [],
                 'evidence':generation_evidence(state['tasks'],windows,now),
@@ -1165,7 +1186,7 @@ class Sources:
 
     def snapshot(self, *, submission=False):
         if submission:
-            state, state_error = self.read("flow", "/api/state", retry_transient=True)
+            state, state_error = self.read("flow", "/api/state", transient_retries=1)
             # Submission uses account, project and task data. Library facets are only for display.
             facets, facets_error = None, None
         else:

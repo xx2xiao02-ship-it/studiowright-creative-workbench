@@ -58,17 +58,20 @@ class AutomaticRecoverySafety(unittest.IsolatedAsyncioTestCase):
                              dict(one='ok', two='unconfirmed', three='ok', four='ok'))
 
     async def run_case(self, page='binding', busy=False, review=None, repairable=True, reset_draft=None,
-                       maintenance=False):
+                       maintenance=False, outcomes=None):
         with fixture_directory() as directory:
             controller=types.ModuleType('shared_session_controller')
             controller.flow_runtime=lambda:(None,types.SimpleNamespace(locks_dir=lambda:directory))
             account=dict(profile='fixture',key='flow-account-'+'a'*64,email='fixture@example.invalid',
                          projects=[],review_task=review,repairable=repairable)
-            action=AsyncMock(return_value=('ok',None))
+            action=AsyncMock(return_value=('ok',None), side_effect=outcomes)
+            probe=AsyncMock(side_effect=page) if isinstance(page, list) else AsyncMock(return_value=page)
             with patch.dict(sys.modules,{'shared_session_controller':controller}), \
                  patch('flow_window_policy.Lifecycle') as lifecycle, \
-                 patch.object(recovery,'inspect_page',AsyncMock(return_value=page)), \
+                 patch.object(recovery,'inspect_page',probe), \
                  patch.object(recovery,'repair',action), \
+                 patch.object(recovery.asyncio,'sleep',AsyncMock()), \
+                 patch('task_coordinator.Coordinator'), \
                  patch.object(recovery,'review_hold',return_value=False), \
                  patch.object(recovery,'operator_dispatch_paused',return_value=False), \
                  patch.object(recovery.subprocess,'check_output',return_value='active'):
@@ -84,6 +87,29 @@ class AutomaticRecoverySafety(unittest.IsolatedAsyncioTestCase):
         result,action=await self.run_case()
         self.assertEqual(result['fixture']['page'],'ok')
         self.assertTrue(action.await_args.kwargs['safe_only'])
+
+    async def test_connection_is_retried_and_stops_when_the_project_opens(self):
+        result, action = await self.run_case(
+            page=[ConnectionRefusedError(), TimeoutError(), 'binding'],
+            outcomes=[ConnectionError(), TimeoutError(), ('ok', None)])
+        self.assertEqual(result['fixture']['page'], 'ok')
+        self.assertEqual(result['fixture']['attempts'], 3)
+        self.assertEqual(action.await_count, 3)
+
+    async def test_three_attempts_are_required_before_a_project_load_failure_is_reported(self):
+        result, action = await self.run_case(page='load_failed', outcomes=[('load_failed', None)] * 3)
+        self.assertEqual(result['fixture']['page'], 'load_failed')
+        self.assertEqual(result['fixture']['attempts'], 3)
+        self.assertEqual([call.args[1] for call in action.await_args_list], ['load_failed'] * 3)
+
+    async def test_retries_stop_at_google_verification_or_an_account_in_use(self):
+        for stop in ('verification_required', 'busy'):
+            with self.subTest(stop=stop):
+                result, action = await self.run_case(page=['load_failed', stop],
+                                                     outcomes=[('load_failed', None), (stop, None)])
+                self.assertEqual(result['fixture']['page'], stop)
+                self.assertEqual(result['fixture']['attempts'], 2)
+                self.assertEqual(action.await_count, 1 if stop == 'verification_required' else 2)
 
     async def test_running_tasks_and_unconfirmed_results_are_not_touched(self):
         for args in [dict(busy=True),dict(repairable=False)]:

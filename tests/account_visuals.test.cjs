@@ -282,22 +282,55 @@ test('usage bars preserve zero, exact usage, and unknown values', () => {
   }
 });
 
-test('Flow refresh cooldown belongs to the account that was already rechecked', async () => {
-  const first = {profile:'first', flow_login:'verified'};
-  const second = {profile:'second', flow_login:'verified'};
+test('Flow waits for the background repair even if another pass owns the repair lock', async () => {
+  const initial = {accounts:{first:'binding',second:'project'},recovery:{first:'failed',second:'pending'}};
+  let calls = 0;
   const context = vm.createContext({
-    state:{snapshotFresh:true,snapshot:{real_accounts:{items:[first,second]}}},
-    flowReadinessObservation:{}, rememberFlowReadiness:()=>{},
-    autoFlowRecovery:null, autoFlowRecoveryProfiles:new Set(),
-    autoFlowRecoveryAfter:new Map([['first',Date.now()+300000]]),
-    postJson:async () => ({accounts:{first:'overlay',second:'ok'}}),
+    state:{snapshotFresh:true}, initial, autoFlowRecovery:null,
+    flowReadinessObservation:{pageChecks:initial,dispatch:{available:true}},
+    rememberFlowReadiness:()=>assert.fail('a busy repair worker has not supplied an outcome'),
+    postJson:async () => {
+      calls++;
+      throw Object.assign(new Error('repair in progress'), {status:409});
+    },
   });
   load('autoRecoverFlowPages',context);
-  vm.runInContext("autoRecoverFlowPages({accounts:{first:'overlay',second:'overlay'}})",context);
-  assert.deepEqual(Array.from(context.autoFlowRecoveryProfiles), ['second']);
+  vm.runInContext('autoRecoverFlowPages(initial); autoRecoverFlowPages(initial);',context);
   await context.autoFlowRecovery;
-  vm.runInContext("autoRecoverFlowPages({accounts:{first:'login',second:'verification_required'}})",context);
+  assert.equal(calls,1);
+  assert.equal(context.flowReadinessObservation.pageChecks.recovery.second,'pending');
+  vm.runInContext("autoRecoverFlowPages({recovery:{first:'failed',second:'waiting'}})",context);
   assert.equal(context.autoFlowRecovery,null);
+});
+
+test('Flow card waits through local recovery, reports exhaustion, and clears a stale warning on success', () => {
+  const account = {profile:'a', flow_login:'verified', flow_health:'ready', flow_balance:1000,
+    flow_balance_fresh:true, flow_risk_known:true, flow_pacing_known:true};
+  const snapshot = {checked_at:10, flow_state:{available:true}, real_accounts:{available:true,items:[account]},
+    flow_coordination:{desktop_keyboard_ready:true,windows:[],window_lifecycle:[],window_bindings:[]}};
+  const checks = {accounts:{a:'binding'}, recovery:{a:'pending'}};
+  const context = vm.createContext({account,snapshot,checks,flowReadinessObservation:null,flowWindowIssue:()=>null});
+  for (const name of ['flowLoginNotice','accountIssues','flowGovernance','auditFlowAccounts','flowAccountReason','flowOccupiedSlots']) load(name,context);
+  const row = () => vm.runInContext('auditFlowAccounts(snapshot,{available:true,active:0,maximum:1},checks,11)[0]',context);
+  const reason = () => {
+    context.row = row();
+    return vm.runInContext('flowAccountReason(account,snapshot,row,row.page)',context);
+  };
+  assert.equal(row().status,'checking');
+  assert.equal(row().issues.length,0);
+  assert.equal(reason().label,'自动恢复中');
+  checks.accounts.a = 'flow_landing';
+  assert.equal(reason().label,'自动恢复中');
+  checks.accounts.a = 'verification_required';
+  assert.equal(reason().label,'需要用户登录');
+  checks.accounts.a = 'binding';
+  checks.recovery.a = 'failed';
+  assert.equal(row().status,'blocked');
+  assert.match(reason().text,/3 次.*一键就绪/);
+  checks.accounts.a = 'ok';
+  checks.recovery = {};
+  assert.equal(row().status,'ready');
+  assert.equal(reason(),null);
 });
 
 test('compact Gemini quota keeps recovery dates in hover details', () => {
@@ -552,7 +585,7 @@ test('account cards render fallback states without aborting the account list', (
   for (const status of ['ready', 'blocked', 'unknown', 'checking']) {
     const context = vm.createContext({
       item: {profile:'test', key:'flow-account-test', gemini:'verified'}, state:{snapshot:{}},
-      flow:true,
+      flow:true, signIn:null,
       channelReadFailed:false, officialQuotaData:null, officialQuotaReadFailed:false, flowReadinessObservation:null,
       flowRow:{status,issues:[]}, geminiRow:{status}, issues:[],
       flowWindowIssue: () => null, readinessBadge: row => row.status,
@@ -743,7 +776,7 @@ test('an idle Flow draft is shown as a refreshable state with the result of a co
   load('flowAccountReason', context);
   const reasonFor = (row) => vm.runInContext(
     `flowAccountReason({profile:'a'},{tasks:[]},${JSON.stringify(row)},'draft')`, context);
-  assert.equal(reasonFor({recovering:true}).label, '刷新复查中');
+  assert.equal(reasonFor({recovering:true}).label, '自动恢复中');
   assert.match(reasonFor({status:'blocked'}).text, /空闲时会自动刷新/);
   assert.match(reasonFor({status:'blocked',draftResetAttempted:true}).text, /刷新后仍有/);
 });
