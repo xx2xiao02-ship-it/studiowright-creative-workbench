@@ -522,12 +522,15 @@ class RealPool:
         return {'source': 'workbench', 'items': [dict(row) for row in rows]}
 
     def dialogue_statistics(self):
-        """Aggregate this workbench's dialogue records, excluding material analysis.
-
-        Rolling 7-day window: stale failures age out instead of polluting the UI.
-        """
+        """Return seven days of dialogue metrics and confirmed production outcomes."""
         cutoff = time.time() - 7 * 86400
         with self.connection() as db:
+            official_outcomes = dict(db.execute(
+                """SELECT COUNT(CASE WHEN r.status='completed' THEN 1 END) AS completed,
+                          COUNT(CASE WHEN r.status='failed' THEN 1 END) AS failed
+                   FROM requests r JOIN official_jobs j USING(request_id)
+                   WHERE r.created >= ? AND j.readiness_probe=0
+                     AND r.status IN ('completed','failed')""", (cutoff,)).fetchone())
             totals = dict(db.execute(
                 "SELECT COUNT(*) AS total,"
                 " SUM(CASE WHEN r.status='completed' THEN 1 ELSE 0 END) AS completed,"
@@ -564,7 +567,8 @@ class RealPool:
         for record in [totals,*accounts.values()]:
             for field in ('total','completed','failed','unresolved','processing','first_samples','total_samples'):
                 record[field]=record[field] or 0
-        return {'total':totals,'accounts':accounts,'token_count':None,'token_source':'unavailable'}
+        return {'total':totals,'accounts':accounts,'official_outcomes':official_outcomes,
+                'token_count':None,'token_source':'unavailable'}
 
     def _read_browser_inventory(self):
         if self.browser_inventory is None:

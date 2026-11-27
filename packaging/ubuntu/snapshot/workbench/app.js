@@ -856,9 +856,37 @@ window.addEventListener('pageshow', wakeSnapshotRefresh);
 window.addEventListener('online', wakeSnapshotRefresh);
 window.addEventListener('offline', () => { showConnectionState(false); $('lastUpdated').textContent = '连接中断 · 保留已读取的数据'; });
 
+function renderSuccessRate(target, label, period, hint, results) {
+  if (!target) return;
+  const {completed, failed} = results || {};
+  const known = [completed, failed].every(count => Number.isSafeInteger(count) && count >= 0);
+  const total = known ? completed + failed : 0;
+  const rate = total > 0 ? 100 * completed / total : null;
+  const rounded = rate === null ? null : Number(rate.toFixed(2));
+  const percent = rounded === null ? '—' : rounded === 100 && failed > 0 ? '<100%' : rounded + '%';
+  const countLabel = known ? `${completed.toLocaleString('zh-CN')} 成功 · ${failed.toLocaleString('zh-CN')} 失败` : '结果暂未读取';
+  const meter = rate === null ? `role="img" aria-label="${esc(label)}暂无已确认结果"`
+    : `role="progressbar" aria-label="${esc(label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${rate}"`;
+  target.innerHTML = `<div class="quota-window-label" title="${esc(hint)}"><span>${esc(label)}${period ? `<small>${esc(period)}</small>` : ''}</span><strong>${esc(percent)}</strong></div><div class="quota-track${rate === null ? ' is-unknown' : ''}" ${meter}><i></i></div><span class="quota-reset">${countLabel}</span>`;
+  target.querySelector('i').style.width = `${rate ?? 0}%`;
+}
+
+function renderOverviewSuccess(snapshot) {
+  const flowKnown = snapshot?.flow_state?.available === true && Array.isArray(snapshot.tasks);
+  const tasks = flowKnown ? snapshot.tasks.filter(task=>['image','video'].includes(task.kind)) : [];
+  const flow = flowKnown ? {
+    completed: tasks.filter(task=>task.status==='succeeded').length,
+    failed: tasks.filter(task=>task.status==='failed').length
+  } : null;
+  renderSuccessRate($('flowSuccessOverview'), 'Flow 成功率', '', '图片及视频任务，含下载阶段', flow);
+  renderSuccessRate($('geminiSuccessOverview'), 'Gemini 成功率', '近 7 天', '统计近 7 天正式调用的已确认结果',
+    snapshot?.gemini_stats?.official_outcomes);
+}
+
 function renderOverview() {
   const snapshot = state.snapshot;
   renderOverviewCharts(snapshot);
+  renderOverviewSuccess(snapshot);
   renderOfficialQuota();
   renderAccountInsights(snapshot, $('overviewInsights'));
   const flowAudit=governanceAudits.flow;
@@ -4716,14 +4744,38 @@ function updateDispatchState(paused) {
   const detail = document.querySelector('[data-gemini-dispatch-state]');
   if (detail) detail.textContent = dispatchStateText(state.dispatchPaused);
 }
+function renderConcurrencyUsage(service, active, maximum, paused, detail = '') {
+  const meter = $(service + 'ConcurrencyMeter');
+  const output = $(service + 'ConcurrencyUsageText');
+  if (!meter || !output) return;
+  const fill = meter.firstElementChild;
+  const known = Number.isInteger(active) && active >= 0 && Number.isInteger(maximum) && maximum > 0;
+  meter.classList.toggle('is-unknown', !known);
+  if (!known) {
+    meter.removeAttribute('aria-valuenow');
+    meter.removeAttribute('aria-valuemax');
+    output.textContent = '并发暂不可读取';
+    fill.style.width = '0%';
+    return;
+  }
+  const occupied = Math.min(active, maximum);
+  const usage = (paused ? '维护中 · ' : '') + `占用 ${active} / ${maximum}${detail}`;
+  meter.setAttribute('aria-valuenow', String(occupied));
+  meter.setAttribute('aria-valuemax', String(maximum));
+  if (output.textContent !== usage) output.textContent = usage;
+  fill.style.width = `${occupied * 100 / maximum}%`;
+}
+
 function showDispatchConcurrency(data) {
   const occupied=flowOccupiedSlots(data);
-  if (!Number.isInteger(data.maximum) || data.maximum < 1 || data.maximum > 5 || !Number.isInteger(occupied)) throw new Error('并发设置暂不可读取。');
-  updateDispatchState(data.available === true ? data.paused : null);
+  if (data.available !== true || !Number.isInteger(data.maximum) || data.maximum < 1 || data.maximum > 5 ||
+      !Number.isInteger(occupied) || occupied < 0) throw new Error('并发设置暂不可读取。');
+  updateDispatchState(data.paused);
   dispatchConcurrencyMaximum = data.maximum;
   $('dispatchConcurrency').value = String(data.maximum);
   $('dispatchConcurrency').disabled = false;
   const following=data.background_videos ? ` · 视频跟进 ${data.background_videos}` : '';
+  renderConcurrencyUsage('flow', occupied, data.maximum, data.paused, following);
   $('dispatchConcurrencyStatus').textContent = data.paused ? '维护中' : `占用 ${occupied} / ${data.maximum}${following}`;
   $('dispatchConcurrencyStatus').title = 'Flow 确认接收视频后释放派发名额，成片继续在后台跟进。调低名额时，已有任务继续完成。';
 }
@@ -4737,6 +4789,7 @@ async function refreshDispatchConcurrency() {
   } catch (error) {
     if (sequence !== dispatchConcurrencySequence || dispatchConcurrencySaving) return;
     updateDispatchState(null);
+    renderConcurrencyUsage('flow');
     $('dispatchConcurrency').disabled = true;
     $('dispatchConcurrencyStatus').textContent = '并发设置暂不可读取';
   }
@@ -4762,8 +4815,6 @@ $('dispatchConcurrency').addEventListener('change', async () => {
 const geminiConcurrencyInput = $('geminiConcurrency');
 const geminiConcurrencySave = $('geminiConcurrencySave');
 const geminiConcurrencyStatus = $('geminiConcurrencyStatus');
-const geminiConcurrencyMeter = $('geminiConcurrencyMeter');
-const geminiConcurrencyUsageText = $('geminiConcurrencyUsageText');
 let geminiConcurrencyMaximum = null;
 let geminiConcurrencySequence = 0;
 let geminiConcurrencySaving = false;
@@ -4773,24 +4824,6 @@ function updateGeminiConcurrencyButton() {
   geminiConcurrencySave.disabled = geminiConcurrencySaving || geminiConcurrencyInput.disabled ||
     !geminiConcurrencyDirty || !geminiConcurrencyInput.validity.valid ||
     Number(geminiConcurrencyInput.value) === geminiConcurrencyMaximum;
-}
-
-function showGeminiConcurrencyUsage(data) {
-  geminiConcurrencyMeter.classList.toggle('is-unknown', !data);
-  const fill = geminiConcurrencyMeter.firstElementChild;
-  if (!data) {
-    geminiConcurrencyMeter.removeAttribute('aria-valuenow');
-    geminiConcurrencyMeter.removeAttribute('aria-valuemax');
-    geminiConcurrencyUsageText.textContent = '并发暂不可读取';
-    fill.style.width = '0%';
-    return;
-  }
-  const occupied = Math.min(data.active, data.maximum);
-  const usage = (data.paused ? '维护中 · ' : '') + `占用 ${data.active} / ${data.maximum} · 排队 ${data.queued}`;
-  geminiConcurrencyMeter.setAttribute('aria-valuenow', String(occupied));
-  geminiConcurrencyMeter.setAttribute('aria-valuemax', String(data.maximum));
-  if (geminiConcurrencyUsageText.textContent !== usage) geminiConcurrencyUsageText.textContent = usage;
-  fill.style.width = `${occupied / data.maximum * 100}%`;
 }
 
 function showGeminiConcurrency(data, saved = false) {
@@ -4803,7 +4836,7 @@ function showGeminiConcurrency(data, saved = false) {
   geminiConcurrencyInput.disabled = false;
   if (!geminiConcurrencyDirty && (saved || document.activeElement !== geminiConcurrencyInput))
     geminiConcurrencyInput.value = String(data.maximum);
-  showGeminiConcurrencyUsage(data);
+  renderConcurrencyUsage('gemini', data.active, data.maximum, data.paused, ` · 排队 ${data.queued}`);
   geminiConcurrencyStatus.textContent = saved ? '已保存' : '';
   updateGeminiConcurrencyButton();
 }
@@ -4817,7 +4850,7 @@ async function refreshGeminiConcurrency() {
   } catch (_) {
     if (sequence !== geminiConcurrencySequence || geminiConcurrencySaving) return;
     if (geminiConcurrencyMaximum === null) geminiConcurrencyInput.disabled = true;
-    showGeminiConcurrencyUsage(null);
+    renderConcurrencyUsage('gemini');
     if (geminiConcurrencyMaximum === null) geminiConcurrencyStatus.textContent = '设置暂不可读取';
     updateGeminiConcurrencyButton();
   }
@@ -5238,12 +5271,6 @@ function renderOfficialQuota() {
   const refreshing = data?.refreshing === true;
   const number = value => value == null ? '—' : value.toFixed(2).replace(/\.00$/, '') + '%';
   const resetText = seconds => typeof seconds === 'number' ? `最近恢复 ${dateTime(seconds)}` : '恢复时间以官方状态为准';
-  const taskKnown = state.snapshot?.flow_state?.available === true && Array.isArray(state.snapshot?.tasks);
-  const tasks = taskKnown ? state.snapshot.tasks.filter(t=>['image','video'].includes(t.kind)) : [];
-  const completed = tasks.filter(t=>t.status==='succeeded').length;
-  const failed = tasks.filter(t=>t.status==='failed').length;
-  const success = completed+failed ? Math.round(completed/(completed+failed)*100) : null;
-  $('flowSuccessOverview').innerHTML = `<div class="quota-window-label"><span>FLOW · 图片 / 视频成功率</span><strong>${success == null ? '—' : success+'%'}<small> 任务成功率</small></strong></div><div class="quota-track ${success == null ? 'is-unknown' : ''}" ${success == null ? 'role="img" aria-label="Flow 任务成功率未知"' : `role="progressbar" aria-label="Flow 图片与视频任务成功率" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${success}"`}><i data-quota-fill="${success ?? 0}"></i></div><span class="quota-reset">${taskKnown ? `${completed} 成功 · ${failed} 失败 · 含任务下载阶段` : '任务记录暂未读取'}</span>`;
   const accounts = state.snapshot?.real_accounts?.items || [];
   const names = new Map(accounts.map(a=>[a.key.replace(/^flow-account-/,''),a.email || a.label || a.profile]));
   const rows = Object.entries(data?.accounts || {});

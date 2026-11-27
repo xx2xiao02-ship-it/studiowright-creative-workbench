@@ -1,7 +1,7 @@
 """Deadline, priority and no-retry checks; provider transports use local fake CLIs."""
 import ast
 import asyncio
-from contextlib import closing
+from contextlib import closing, nullcontext
 import json
 import os
 from pathlib import Path
@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 from gemini_execution import CallBudget, execution_limits
 from official_pool import OfficialPool, DEFAULT_MAX_CONCURRENCY, IMAGE_SESSION_START_TIMEOUT
 from dispatch_limit import DispatchLimit
+from live_pool import RealPool
 from official_runtime import OfficialRuntime, MODEL, BAD_REPLY
 import material_vision
 import gemini_image_input as vision
@@ -50,6 +51,27 @@ class Budgets(unittest.TestCase):
             for value in (True, 0, 3601, '600'):
                 cfg.write_text(json.dumps({'idle_seconds': value}))
                 with self.assertRaises(ValueError): execution_limits(runtime)
+
+
+class OfficialSuccessStatistics(unittest.TestCase):
+    def test_counts_confirmed_production_results_only(self):
+        now = 1800000000
+        with closing(sqlite3.connect(':memory:')) as db:
+            db.row_factory = sqlite3.Row
+            db.executescript("""CREATE TABLE requests(request_id TEXT, account_key TEXT, status TEXT, created REAL, finished REAL);
+                CREATE TABLE official_jobs(request_id TEXT, readiness_probe INTEGER);
+                CREATE TABLE request_metrics(request_id TEXT, first_text_ms REAL);
+                CREATE TABLE material_analyses(request_id TEXT);""")
+            requests = [('text', 'completed', now-60), ('material', 'completed', now-90), ('failure', 'failed', now-120),
+                        ('pending', 'queued', now-1), ('uncertain', 'unknown', now-32), ('probe', 'completed', now-30),
+                        ('old', 'failed', now-8*86400), ('legacy', 'completed', now-80)]
+            db.executemany("INSERT INTO requests VALUES (?,'a',?,?,NULL)", requests)
+            db.executemany("INSERT INTO official_jobs VALUES (?,?)",
+                           [(name, int(name=='probe')) for name, _, _ in requests if name!='legacy'])
+            db.execute("INSERT INTO material_analyses VALUES ('material')")
+            with patch('live_pool.time.time', return_value=now):
+                stats = RealPool.dialogue_statistics(S(connection=lambda: nullcontext(db)))
+        self.assertEqual(stats['official_outcomes'], {'completed':2,'failed':1})
 
 
 class ProbeSlots(unittest.TestCase):

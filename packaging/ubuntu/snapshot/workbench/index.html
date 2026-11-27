@@ -71,14 +71,22 @@
             <div class="desk-usage">
               <section id="geminiQuotaOverview" class="dashboard-quotas" aria-label="Flow 任务与 Gemini 使用统计">
                 <div class="quota-main">
-                  <div class="quota-window-flow">
+                  <div class="usage-metrics">
                     <div id="flowSuccessOverview" class="quota-window"><p class="subtle">正在读取 Flow 成功率…</p></div>
-                    <div class="gemini-concurrency-usage">
-                      <div class="gemini-concurrency-usage-header">
-                        <strong id="geminiConcurrencyUsageLabel">Gemini 并发占用</strong>
+                    <div id="geminiSuccessOverview" class="quota-window"><p class="subtle">正在读取 Gemini 成功率…</p></div>
+                    <div class="concurrency-usage">
+                      <div class="concurrency-usage-header">
+                        <strong id="flowConcurrencyUsageLabel">Flow 并发</strong>
+                        <span id="flowConcurrencyUsageText">正在读取并发…</span>
+                      </div>
+                      <div id="flowConcurrencyMeter" class="quota-track is-unknown" role="progressbar" aria-labelledby="flowConcurrencyUsageLabel" aria-describedby="flowConcurrencyUsageText" aria-valuemin="0"><i aria-hidden="true"></i></div>
+                    </div>
+                    <div class="concurrency-usage">
+                      <div class="concurrency-usage-header">
+                        <strong id="geminiConcurrencyUsageLabel">Gemini 并发</strong>
                         <span id="geminiConcurrencyUsageText">正在读取并发…</span>
                       </div>
-                      <div id="geminiConcurrencyMeter" class="quota-track is-unknown" role="progressbar" aria-labelledby="geminiConcurrencyUsageLabel" aria-describedby="geminiConcurrencyUsageText"><i aria-hidden="true"></i></div>
+                      <div id="geminiConcurrencyMeter" class="quota-track is-unknown" role="progressbar" aria-labelledby="geminiConcurrencyUsageLabel" aria-describedby="geminiConcurrencyUsageText" aria-valuemin="0"><i aria-hidden="true"></i></div>
                     </div>
                   </div>
                   <div id="geminiSharedQuota" class="quota-shared-slot"></div>

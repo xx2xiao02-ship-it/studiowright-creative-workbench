@@ -210,7 +210,6 @@ test('Flow card distinguishes missing bindings from automatic credit updates', (
 
 test('overview averages each fresh shared quota across the whole Gemini account pool', () => {
   const now = 1800000000;
-  const flow = {};
   const shared = {};
   const breakdown = {};
   const target = {
@@ -232,7 +231,7 @@ test('overview averages each fresh shared quota across the whole Gemini account 
     unread: {status:'unavailable'}
   };
   const context = vm.createContext({
-    $: id => ({geminiQuotaOverview:target, flowSuccessOverview:flow, geminiSharedQuota:shared, geminiQuotaBreakdown:breakdown})[id],
+    $: id => ({geminiQuotaOverview:target, geminiSharedQuota:shared, geminiQuotaBreakdown:breakdown})[id],
     document: {},
     state: {},
     dateTime: value => String(value),
@@ -253,7 +252,6 @@ test('overview averages each fresh shared quota across the whole Gemini account 
   });
   for (const name of ['esc', 'savedQuotaValue', 'savedQuotaSummary', 'renderOfficialQuota']) load(name, context);
   vm.runInContext('renderOfficialQuota()', context);
-  assert.match(flow.innerHTML, /FLOW · 图片 \/ 视频成功率/);
   assert.equal((shared.innerHTML.match(/class="quota-shared-card"/g) || []).length, 1);
   assert.match(shared.innerHTML, /Gemini 共享额度[^]*?近 10 分钟读数/);
   assert.match(shared.innerHTML, /5 小时额度<\/span><strong>56\.25%[^]*?aria-valuenow="56\.25"[^]*?>4 \/ 6 个账号已读/);
@@ -263,6 +261,59 @@ test('overview averages each fresh shared quota across the whole Gemini account 
   vm.runInContext('renderOfficialQuota()', context);
   assert.equal((shared.innerHTML.match(/<strong>待读取<\/strong>/g) || []).length, 2);
   assert.doesNotMatch(shared.innerHTML, /aria-valuenow|个账号已读/);
+});
+
+test('overview calculates separate success rates from confirmed Flow and Gemini results', () => {
+  function metric() {
+    const bar = {style:{}};
+    return {bar, querySelector:() => bar};
+  }
+  const flow = metric();
+  const gemini = metric();
+  const snapshot = {
+    flow_state:{available:true},
+    tasks:[{kind:'image',status:'succeeded'},{kind:'video',status:'failed'},
+      {kind:'image',status:'queued'},{kind:'quote',status:'failed'}],
+    gemini_stats:{official_outcomes:{completed:4842,failed:20},total:{completed:9,failed:99}}
+  };
+  const context = vm.createContext({snapshot, $: id => ({flowSuccessOverview:flow,geminiSuccessOverview:gemini})[id]});
+  for (const name of ['esc','renderSuccessRate','renderOverviewSuccess']) load(name,context);
+  vm.runInContext('renderOverviewSuccess(snapshot)',context);
+  assert.match(flow.innerHTML, /Flow 成功率[^]*?<strong>50%<\/strong>[^]*?1 成功 · 1 失败/);
+  assert.equal(flow.bar.style.width,'50%');
+  assert.match(gemini.innerHTML, /Gemini 成功率[^]*?<strong>99\.59%<\/strong>[^]*?4,842 成功 · 20 失败/);
+  snapshot.gemini_stats.official_outcomes = {completed:0,failed:2};
+  vm.runInContext('renderOverviewSuccess(snapshot)',context);
+  assert.match(gemini.innerHTML, /<strong>0%<\/strong>/);
+  vm.runInContext('renderOverviewSuccess(null)',context);
+  assert.match(flow.innerHTML, /暂无已确认结果/);
+  assert.doesNotMatch(flow.innerHTML, /aria-valuenow/);
+});
+
+test('the two concurrency meters update independently and clear unavailable counts', () => {
+  function meter() {
+    const values = {};
+    return {values, firstElementChild:{style:{}}, classList:{toggle(){}},
+      setAttribute(key,value) {values[key]=value;}, removeAttribute(key) {delete values[key];}};
+  }
+  const flow = meter(), gemini = meter();
+  const flowText = {}, geminiText = {};
+  const context = vm.createContext({$: id => ({
+    flowConcurrencyMeter:flow,geminiConcurrencyMeter:gemini,flowConcurrencyUsageText:flowText,geminiConcurrencyUsageText:geminiText
+  })[id]});
+  load('renderConcurrencyUsage',context);
+  const render = (...args) => context.renderConcurrencyUsage(...args);
+  render('flow', 2, 5, false, ' · 视频跟进 1');
+  render('gemini', 7, 50, false, ' · 排队 3');
+  assert.equal(flow.firstElementChild.style.width,'40%');
+  assert.equal(flowText.textContent,'占用 2 / 5 · 视频跟进 1');
+  assert.equal(gemini.firstElementChild.style.width,'14%');
+  assert.equal(gemini.values['aria-valuenow'],'7');
+  assert.equal(geminiText.textContent,'占用 7 / 50 · 排队 3');
+  render('flow');
+  assert.equal(flow.values['aria-valuenow'],undefined);
+  assert.equal(flowText.textContent,'并发暂不可读取');
+  assert.equal(gemini.values['aria-valuenow'],'7');
 });
 
 test('Gemini account avatars distinguish Neon and Carbon independently', () => {
