@@ -80,6 +80,37 @@ class AutoRefreshTickTest(unittest.TestCase):
         self.assertIsNone(module.quota_restriction(row,reset+10))
         self.assertEqual(module.quota_restriction({'status':'verification_required'},reset),'verification_required')
 
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'The official quota reader runs on Ubuntu')
+    def test_headless_quota_uses_each_accounts_login_mode(self):
+        module = load_quota_module()
+        reply = types.SimpleNamespace(returncode=0, stderr='', stdout=json.dumps({
+            'status':'SUCCESS',
+            'response':('Gemini Models\tWeekly Limit Remaining\t96%\t\n'
+                        'Gemini Models\tFive Hour Limit Remaining\t80%\t\n'),
+        }))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / 'home/.gemini/antigravity-cli'
+            for name in ('antigravity-oauth-token', 'settings.json', 'jetski_state.pbtxt', 'cache/onboarding.json'):
+                path = config / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('{}')
+            runtime = types.SimpleNamespace(account=lambda _: {
+                'root':root, 'binary':root/'cli', 'email':'test@example.invalid',
+            }, text_models=lambda: {'advanced': {'gemini-4-hydrogen-medium'}})
+            for key in ('ordinary', 'advanced'):
+                with self.subTest(account=key), patch.object(module, 'official_network_env', return_value={}), \
+                     patch.object(module.subprocess, 'run', return_value=reply) as runner:
+                    row = module.read_account(runtime, key)
+                    runner.assert_called_once()
+                    self.assertEqual(runner.call_args.args[0][1:3], ['--print', '/usage'])
+                    env = runner.call_args.kwargs['env']
+                    self.assertEqual('SSH_TTY' in env, key == 'advanced')
+                    self.assertEqual('SSH_CONNECTION' in env, key == 'advanced')
+                    self.assertNotEqual(env['HOME'], str(root/'home'))
+                    self.assertEqual(row['five_hour']['remaining_percent'], 80)
+                    self.assertEqual(row['weekly']['remaining_percent'], 96)
+
     def test_quota_parsers_keep_the_reported_window_when_one_is_missing(self):
         module = load_quota_module()
         weekly = 'Gemini Models\tWeekly Limit Remaining\t100%\t2026-11-29T12:17:00Z'

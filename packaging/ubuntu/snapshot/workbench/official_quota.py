@@ -155,7 +155,7 @@ def read_account(runtime, key, *, save_renewal=False):
     if not account:
         return {'status': 'authorization_unavailable', 'checked_at': time.time()}
     original = account['root']/'home/.gemini/antigravity-cli'
-    advanced=not save_renewal and key in runtime.text_models()
+    advanced=key in runtime.text_models()
     # Credentials exist only in this private tmpfs directory, deleted on every exit.
     # The native CLI renews auth in its process; no token is copied back or logged.
     with tempfile.TemporaryDirectory(prefix='workbench-quota-', dir='/dev/shm') as temporary:
@@ -165,7 +165,7 @@ def read_account(runtime, key, *, save_renewal=False):
         original_token=None
         for name in (token_name, 'settings.json', 'jetski_state.pbtxt', 'cache/onboarding.json'):
             source = original/name
-            if advanced and name in ('jetski_state.pbtxt','cache/onboarding.json') and not source.exists():
+            if advanced and not save_renewal and name in ('jetski_state.pbtxt','cache/onboarding.json') and not source.exists():
                 continue
             if source.is_symlink() or not source.is_file() or source.stat().st_size > 1024*1024:
                 return {'status': 'authorization_unavailable', 'checked_at': time.time()}
@@ -177,9 +177,13 @@ def read_account(runtime, key, *, save_renewal=False):
         workspace = root/'workspace'; workspace.mkdir(mode=0o700)
         env = {'HOME':str(home), 'XDG_CONFIG_HOME':str(home/'.config'), 'XDG_CACHE_HOME':str(home/'.cache'),
                'XDG_DATA_HOME':str(home/'.local/share'), 'PATH':'/usr/bin:/bin', 'LANG':'C.UTF-8',
-               'TERM':'xterm-256color', 'SSH_TTY':'quota-read-only', 'SSH_CONNECTION':'quota-read-only'}
-        env.update(official_network_env())
+               'TERM':'xterm-256color'}
+        # Match the account's production login mode. Ordinary accounts can
+        # otherwise wait for an SSH authorization code instead of reading quotas.
         if advanced:
+            env.update(SSH_TTY='quota-read-only', SSH_CONNECTION='quota-read-only')
+        env.update(official_network_env())
+        if not save_renewal:
             headless=read_headless_usage(account,workspace,env)
             if headless:
                 return headless
