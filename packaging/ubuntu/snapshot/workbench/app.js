@@ -1,9 +1,6 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-// Google Flow's daily grant policy: https://support.google.com/flow/answer/16526234
-const flowDailyCreditLabel = '每日加赠 +50';
-const flowDailyCreditHint = '首次生成后开始按日刷新，未使用的每日积分不结转。';
 const state = { snapshot: null, snapshotReceivedAt: 0, view: "overview", refreshSequence: 0, dispatchPaused: null };
 state.serviceActivations = {};
 state.connectionLost = false;
@@ -267,7 +264,7 @@ function flowAccountReason(account, snapshot, row, pageState, activity) {
   if (account.flow_operator_paused && !account.flow_risk_review_required)
     return {label:'手动暂停',text:'Flow 任务暂不派发。可在「账号操作」里恢复账号。',showOnCard:true,noScreenshot:true};
   const page = pageState || row?.page;
-  const signIn = flowLoginNotice(page);
+  const signIn = flowLoginNotice(page === 'flow_landing' && (row?.recovering || row?.recoveryFailed) ? null : page);
   if (signIn) return {...signIn, showOnCard:true, noScreenshot:true};
   const checks = account.flow_preflight_reasons || [];
   if (checks.length && !account.flow_risk_paused && !account.flow_cooling) {
@@ -283,7 +280,11 @@ function flowAccountReason(account, snapshot, row, pageState, activity) {
     });
     return {label:'Flow 派发自检未通过', text:[...new Set(reasons)].join('；'), noScreenshot:true};
   }
-  if (row?.recovering && !activity) return {label:'刷新复查中',text:'正在刷新 Flow 任务页，随后复查页面和积分。'};
+  if (row?.recovering && !activity) return {label:'自动恢复中',text:'工作台正在重新连接或刷新原项目页，你暂时不需要操作。',
+    showOnCard:true,noScreenshot:true};
+  if (row?.recoveryFailed && !activity) return {label:'自动恢复未通过',
+    text:'已尝试 3 次。请在这个账号的 Ubuntu 浏览器打开原 Flow 项目，再点「Flow 一键就绪」。',
+    showOnCard:true,noScreenshot:true};
   const window = (snapshot?.flow_coordination?.windows || []).find(w => w.profile === account.profile);
   const tasks = (snapshot?.tasks || []).filter(t => ['image','video'].includes(t.kind) &&
     (t.source_profile === account.profile || (t.retry?.attempts || []).some(a => a.profile === account.profile)));
@@ -855,9 +856,37 @@ window.addEventListener('pageshow', wakeSnapshotRefresh);
 window.addEventListener('online', wakeSnapshotRefresh);
 window.addEventListener('offline', () => { showConnectionState(false); $('lastUpdated').textContent = '连接中断 · 保留已读取的数据'; });
 
+function renderSuccessRate(target, label, period, hint, results) {
+  if (!target) return;
+  const {completed, failed} = results || {};
+  const known = [completed, failed].every(count => Number.isSafeInteger(count) && count >= 0);
+  const total = known ? completed + failed : 0;
+  const rate = total > 0 ? 100 * completed / total : null;
+  const rounded = rate === null ? null : Number(rate.toFixed(2));
+  const percent = rounded === null ? '—' : rounded === 100 && failed > 0 ? '<100%' : rounded + '%';
+  const countLabel = known ? `${completed.toLocaleString('zh-CN')} 成功 · ${failed.toLocaleString('zh-CN')} 失败` : '结果暂未读取';
+  const meter = rate === null ? `role="img" aria-label="${esc(label)}暂无已确认结果"`
+    : `role="progressbar" aria-label="${esc(label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${rate}"`;
+  target.innerHTML = `<div class="quota-window-label" title="${esc(hint)}"><span>${esc(label)}${period ? `<small>${esc(period)}</small>` : ''}</span><strong>${esc(percent)}</strong></div><div class="quota-track${rate === null ? ' is-unknown' : ''}" ${meter}><i></i></div><span class="quota-reset">${countLabel}</span>`;
+  target.querySelector('i').style.width = `${rate ?? 0}%`;
+}
+
+function renderOverviewSuccess(snapshot) {
+  const flowKnown = snapshot?.flow_state?.available === true && Array.isArray(snapshot.tasks);
+  const tasks = flowKnown ? snapshot.tasks.filter(task=>['image','video'].includes(task.kind)) : [];
+  const flow = flowKnown ? {
+    completed: tasks.filter(task=>task.status==='succeeded').length,
+    failed: tasks.filter(task=>task.status==='failed').length
+  } : null;
+  renderSuccessRate($('flowSuccessOverview'), 'Flow 成功率', '', '图片及视频任务，含下载阶段', flow);
+  renderSuccessRate($('geminiSuccessOverview'), 'Gemini 成功率', '近 7 天', '统计近 7 天正式调用的已确认结果',
+    snapshot?.gemini_stats?.official_outcomes);
+}
+
 function renderOverview() {
   const snapshot = state.snapshot;
   renderOverviewCharts(snapshot);
+  renderOverviewSuccess(snapshot);
   renderOfficialQuota();
   renderAccountInsights(snapshot, $('overviewInsights'));
   const flowAudit=governanceAudits.flow;
@@ -1335,12 +1364,13 @@ function flowGovernance(snapshot, fresh = state.snapshotFresh, verifiedEmpty = n
     else if (account.flow_balance <= 0 && !issues.some(i=>i.key==='flow_empty'))
       add('flow_empty','Flow 积分不足','积分恢复后重新检查。');
     const window=windows.get(account.profile);
-    if (!window || !['idle','preparing','submitting','submitted','generated','downloading','blocked_draft','result_unknown','needs_verification'].includes(window.state))
+    const pageVerified = verifiedEmpty.has(account.profile) && !(snapshot.checked_at > probeStartedAt);
+    if (!pageVerified && (!window || !['idle','preparing','submitting','submitted','generated','downloading','blocked_draft','result_unknown','needs_verification'].includes(window.state)))
       add('flow_binding','任务窗口运行状态待核对','打开 Flow 页的「账号检查记录」核对固定窗口。');
     if (window?.state==='blocked_draft' && !issues.some(i=>i.key==='flow_draft') &&
         !(verifiedEmpty.has(account.profile) && window.updated <= probeStartedAt))
       add('flow_draft','固定任务窗口有草稿或附件','点「Flow 一键就绪」立即复查。');
-    if (!issues.some(issue=>issue.key.startsWith('flow_window_') || issue.key==='flow_draft')) {
+    if (!pageVerified && !issues.some(issue=>issue.key.startsWith('flow_window_') || issue.key==='flow_draft')) {
       const life=lifecycle.get(account.profile);
       if (c?.window_lifecycle_available!==true || life?.unique_ok!==1)
         add('flow_binding','任务窗口唯一性待核对','打开 Flow 页的「账号检查记录」核对原账号窗口，保留手动窗口和草稿。');
@@ -1359,11 +1389,6 @@ let flowReadinessObservation=null, flowReadinessReadAt=0, lastFlowReadiness=null
 function rememberFlowReadiness(pageChecks,dispatch) {
   if (!pageChecks?.accounts || !Number.isFinite(pageChecks.checked_at) || dispatch?.available!==true) return;
   if (flowReadinessObservation?.pageChecks.checked_at>pageChecks.checked_at) return;
-  const previous = flowReadinessObservation?.pageChecks.busy_rechecked || [];
-  const rechecked = new Set([...(pageChecks.busy_rechecked || []),
-    ...previous.filter(profile => Date.now() < (autoFlowRecoveryAfter.get(profile) || 0))]);
-  pageChecks={...pageChecks,busy_rechecked:[...rechecked].filter(profile =>
-    pageChecks.accounts[profile]==='busy' && !pageChecks.active_tasks?.[profile])};
   flowReadinessObservation={pageChecks,dispatch,receivedAt:performance.now()};
 }
 
@@ -1371,7 +1396,7 @@ async function refreshFlowReadinessStatus() {
   if (Date.now()-flowReadinessReadAt<30000 || governanceAudits.flow?.running) return;
   flowReadinessReadAt=Date.now();
   const [pageChecks,dispatch]=await Promise.all([
-    getJson('/api/flow-readiness',{timeoutMs:14000}),getJson('/api/dispatch/concurrency',{timeoutMs:8000})
+    getJson('/api/flow-readiness',{timeoutMs:32000}),getJson('/api/dispatch/concurrency',{timeoutMs:8000})
   ]);
   rememberFlowReadiness(pageChecks,dispatch);
   autoRecoverFlowPages(pageChecks);
@@ -1380,33 +1405,16 @@ async function refreshFlowReadinessStatus() {
 }
 
 let autoFlowRecovery = null;
-const autoFlowRecoveryAfter = new Map();
-let autoFlowRecoveryProfiles = new Set();
 function autoRecoverFlowPages(pageChecks) {
-  if (autoFlowRecovery || !state.snapshotFresh) return;
-  const candidates = Object.entries(pageChecks?.accounts || {}).filter(([profile, value]) => {
-    const account = state.snapshot?.real_accounts?.items?.find(a => a.profile === profile);
-    return Date.now() >= (autoFlowRecoveryAfter.get(profile) || 0) &&
-      (['binding','project','flow_landing','editor','overlay','unconfirmed','unique','load_failed'].includes(value)
-        || (['busy','draft'].includes(value) && !pageChecks.active_tasks?.[profile])) && !pageChecks?.review?.[profile] &&
-      account?.flow_login === 'verified' && account?.flow_risk_paused !== true &&
-      account?.flow_operator_paused !== true && account?.flow_cooling !== true;
-  });
-  if (!candidates.length) return;
-  autoFlowRecoveryProfiles = new Set(candidates.map(([profile]) => profile));
+  if (autoFlowRecovery || !state.snapshotFresh || flowReadinessObservation?.dispatch?.paused ||
+      !Object.values(pageChecks?.recovery || {}).includes('pending')) return;
   autoFlowRecovery = postJson('/api/flow-readiness/auto', {}).then(result => {
-    if (!result || !result.accounts) return;
-    for (const [profile] of candidates) {
-      if (result.accounts[profile] !== 'busy' || result.busy_rechecked?.includes(profile))
-        autoFlowRecoveryAfter.set(profile, Date.now() + 300000);
-    }
     rememberFlowReadiness(result, flowReadinessObservation?.dispatch);
-    if (state.view === 'accounts') renderAccounts();
   }).catch(() => {
-    // Preserve the failure reason and wait for the bounded next recovery pass.
+    // A worker or another page may own the repair. The next read gets the verified result.
   }).finally(() => {
     autoFlowRecovery = null;
-    autoFlowRecoveryProfiles.clear();
+    if (state.view === 'overview' && state.snapshot) renderAccountInsights(state.snapshot,$('overviewInsights'));
     if (state.view === 'accounts') renderAccounts();
   });
 }
@@ -1603,7 +1611,7 @@ const governanceDialog = $('governanceDialog');
 let governanceService = 'gemini', governanceCases = null, governanceRead = null, governanceReadFailed = false;
 let governanceError = '';
 const governanceAudits = {flow:null,gemini:null};
-const governanceAuditLabels = {ready:'可立即派发',queue:'需排队',blocked:'暂不可用',unknown:'待确认'};
+const governanceAuditLabels = {ready:'可立即派发',queue:'需排队',blocked:'暂不可用',unknown:'待确认',checking:'自动恢复中'};
 const flowRecoveryLabels = {prepare_project:'准备该账号的项目',rebind:'重新绑定原窗口',open_project:'进入原账号项目',return_to_project:'尝试返回原任务页',reload:'刷新原页面',reset_draft:'为清除未提交内容刷新原页面',restart:'重启该账号浏览器',dismiss_update:'关闭 Flow 更新提示',dismiss_account_panel:'关闭 Flow 账号面板',release_review:'已核对原任务，解除限制',close_duplicate:'关闭同项目空副本',recheck_window:'复查原固定任务页'};
 
 function flowOccupiedSlots(dispatch) {
@@ -1659,15 +1667,28 @@ function auditFlowAccounts(snapshot, dispatch, pageChecks, probeStartedAt) {
     const active=activeTask===undefined ? (snapshot.tasks || []).some(t=>t.source_profile===profile &&
       ['image','video'].includes(t.kind) && ['queued','running','dispatching'].includes(t.status)) : !!activeTask;
     const busyRechecked=page==='busy' && !active && pageChecks?.busy_rechecked?.includes(profile);
-    const status=blocked.length || review || busyRechecked ? 'blocked' : page==='busy' && active && dispatch?.available===true ? 'queue' : proven && dispatch?.available===true ? 'ready' : 'unknown';
+    const recovery = pageChecks?.recovery?.[profile];
+    const safeToRecover = !active && !review && !['login','verification_required'].includes(page) &&
+      account.flow_login === 'verified' && !account.flow_page_incident && !account.flow_operator_paused &&
+      !account.flow_risk_paused && !account.flow_cooling && !account.flow_preflight_reasons?.length;
+    const recovering = safeToRecover && ['pending','waiting'].includes(recovery);
+    const recoveryFailed = safeToRecover && recovery === 'failed';
+    const visibleIssues = recovering
+      ? blocked.filter(issue => !['flow_binding','flow_page_state','flow_draft','flow_unknown','flow_balance'].includes(issue.key))
+      : blocked;
+    const status=visibleIssues.length || review || recoveryFailed || (busyRechecked && !recovering) ? 'blocked'
+      : recovering ? 'checking' : page==='busy' && active && dispatch?.available===true ? 'queue'
+      : proven && dispatch?.available===true ? 'ready' : 'unknown';
     const history=(repair?.actions || []).map(action=>flowRecoveryLabels[action]).filter(Boolean);
     let note=status==='queue' ? '已有任务正在处理，新任务等待账号空闲。' : status==='ready' ? (evidence==='generating' ? 'Flow 已接收，正在生成。' : evidence==='recent_success' ? '最近 10 分钟已生成产物。' : '输入框和发送入口已核对。') :
+      status==='checking' ? '正在自动恢复原项目窗口。' : recoveryFailed ? '已完成 3 次自动恢复，仍需核对原窗口。' :
       status==='unknown' ? (busy ? '正在复查任务和窗口状态。' : '实际页面或派发服务尚未核对通过。') : '';
     if (status==='ready' && (dispatch.paused || busy || flowOccupiedSlots(dispatch)>=dispatch.maximum)) note+=' 新任务可接收，等调度放行或空出名额。';
     if (history.length) note+=` 本轮处理：${history.join('、')}。${status==='ready' ? '复查通过。' : '复查未通过。'}`;
     if (repair?.note) note+=` ${repair.note}`;
     const draftResetAttempted=page==='draft' && repair?.actions?.includes('reset_draft');
-    return {account,status,page,evidence,review,issues:blocked,note,activeTask,busyRechecked,draftResetAttempted};
+    return {account,status,page,evidence,review,issues:visibleIssues,note,activeTask,busyRechecked,draftResetAttempted,
+      recovering,recoveryFailed};
   });
 }
 
@@ -1678,6 +1699,7 @@ const geminiProbeReasons={
   authorization_still_required:'重新读取授权后仍未通过，云端请求未发出',
   verification_required:'Google 要求额外账号验证',
   quota_or_rate_limit:'Gemini 额度不足或频率受限',
+  quota_recheck_deferred:'额度需重新读取，本轮未发送复查。',
   provider_connection_failed:'连接 Google 失败',
   provider_unavailable:'Google 服务暂时不可用',
   timeout_unconfirmed:'等待云端回复超时，结果未确认',
@@ -1703,7 +1725,8 @@ function auditGeminiAccounts(snapshot, channel, quotaData, expected = null) {
     const reasons={
       dispatch_paused:['账号已手动暂停','确认要启用后，在账号页恢复派发。'],
       unresolved_request:['账号有未确认的消息','由对话后台单独处理，本次就绪检查不读取旧对话。'],
-      official_call_blocked:[geminiProbeReasons[current?.block_reason] || '账号当前受限','本轮未发送验活请求。'],
+      official_call_blocked:[geminiProbeReasons[current?.block_reason] || '账号当前受限',
+        current?.block_reason === 'quota_or_rate_limit' ? '额度恢复后，系统会自动复查这个账号。' : '本轮未发送验活请求。'],
       authorization_not_ready:['官方授权未就绪','到账号详情核对授权身份。']};
     reasons.authorization_in_progress=['正在等待本人授权','到 Ubuntu 的授权窗口完成 Google 登录。'];
     if (channel?.production_send_available===false) add('Gemini 官方通道不可用','核对服务连接及账号授权。');
@@ -1786,7 +1809,7 @@ async function startGovernanceAudit(service, repair = true) {
       }
       audit.snapshot=snapshot;
       audit.dispatch=extra;
-      const pageChecks=flowResult || await getJson('/api/flow-readiness',{timeoutMs:14000}).catch(()=>null);
+      const pageChecks=flowResult || await getJson('/api/flow-readiness',{timeoutMs:32000}).catch(()=>null);
       audit.probeStartedAt=pageChecks?.checked_at || Date.now()/1000;
       audit.rows=auditFlowAccounts(snapshot,extra,pageChecks,audit.probeStartedAt);
       rememberFlowReadiness(pageChecks,extra);
@@ -1965,7 +1988,7 @@ function renderGovernance() {
   const occupied=flowOccupiedSlots(dispatch);
   const slots=!isGemini && Number.isInteger(occupied) && Number.isInteger(dispatch?.maximum)
     ? ` · 派发名额 ${occupied} / ${dispatch.maximum}${dispatch.background_videos ? ` · 视频跟进 ${dispatch.background_videos}` : ''}${dispatch.paused ? ' · 调度已暂停' : ''}` : '';
-  const summary=rows.length ? [`${isGemini ? '可立即派发' : '就绪'} ${counts.ready} / ${rows.length}`, ...['queue','blocked','unknown'].filter(key=>counts[key]).map(key=>governanceAuditLabels[key]+' '+counts[key])].join(' · ')+slots : '';
+  const summary=rows.length ? [`${isGemini ? '可立即派发' : '就绪'} ${counts.ready} / ${rows.length}`, ...['queue','blocked','unknown','checking'].filter(key=>counts[key]).map(key=>governanceAuditLabels[key]+' '+counts[key])].join(' · ')+slots : '';
   const authorization=audit?.authorization;
   const authProgress=isGemini && authorization?.state==='waiting'
     ? `请在 Ubuntu 完成 ${authorization.email} 的 Google 授权（${authorization.completed+1}/${authorization.total}）。确认后自动打开下一个。`
@@ -2123,16 +2146,17 @@ function updateAccountCooldowns() {
 
 setInterval(updateAccountCooldowns, 1000);
 
-function geminiCardStatus(canCall, callBlocked, quota, now) {
+function geminiCardStatus(canCall, callBlocked, quota, now, recovery) {
   if (quota?.status === 'verification_required') return {label:'待 Google 核验', attention:false};
+  if (callBlocked && recovery && quota?.status !== 'authorization_required') {
+    const age = now - quota?.checked_at;
+    const depleted = quota?.status === 'ok' && age >= 0 && age <= 600 &&
+      ['five_hour','weekly'].some(w => quota?.[w]?.remaining_percent === 0);
+    const label = recovery === 'checking' ? '自动复查中' : depleted ? '等待额度恢复' : '等待自动复查';
+    return {label, attention:true, automaticQuotaRecovery:true};
+  }
   if (callBlocked) return {label:'暂不可用', attention:true};
   if (!canCall) return {label:'待确认', attention:false};
-  const age = now - quota?.checked_at;
-  const quotaKnown = quota?.status === 'ok' && Number.isFinite(age) && age >= 0 && age <= 600 &&
-    ['five_hour','weekly'].every(w => {
-      const value = quota?.[w]?.remaining_percent;
-      return Number.isFinite(value) && value >= 0 && value <= 100;
-    });
   return {label:'可调用', attention:false};
 }
 
@@ -2590,7 +2614,7 @@ function renderAccounts() {
   for (const account of accounts) for (const issue of accountIssues(account,state.snapshot,geminiReadinessNow.rows.get(account.key))) {
     if (issue.key.startsWith('flow_') !== flow) continue;
     if (['historical_unconfirmed', 'quota_stale', 'gemini_confirmed_verification'].includes(issue.key)) continue;
-    if (autoFlowRecoveryProfiles.has(account.profile) && ['flow_unknown','flow_page_state','flow_draft'].includes(issue.key)) continue;
+    if (flowReadinessNow.rows.get(account.profile)?.recovering && ['flow_unknown','flow_page_state','flow_draft'].includes(issue.key)) continue;
     affectedAccounts.add(account.key);
     const previous = issueCounts.get(issue.key);
     issueCounts.set(issue.key, {title: issue.title, count: (previous?.count || 0) + 1});
@@ -2601,23 +2625,24 @@ function renderAccounts() {
   const cards = accounts.map((item) => {
     const identity = item.email || item.label || item.profile;
     const official = officialAccount(item);
-    const auditedFlowRow=flowReadinessNow.rows.get(item.profile);
-    const flowRow=autoFlowRecoveryProfiles.has(item.profile)
-      ? {...auditedFlowRow, checking:true, recovering:true, status:'checking', issues:[]}
-      : auditedFlowRow;
+    const flowRow=flowReadinessNow.rows.get(item.profile);
     const geminiRow=geminiReadinessNow.rows.get(item.key);
     const auth=item.gemini_removed ? null : governanceReauthFor(item);
     const authControl=auth?.mode!=='login_only' ? '' : auth.state==='waiting' ? '<span class="subtle">请到 Ubuntu 浏览器完成授权</span>' :
       auth.state==='completed' ? '<span class="subtle">授权已更新 · 待验活</span>' :
       auth.can_start ? `<button class="button button-light" type="button" data-govern-reauth="${esc(auth.request_id)}">打开 Ubuntu 授权页</button>` : '';
-    const issues = accountIssues(item,state.snapshot,geminiRow).filter(issue => issue.key !== 'historical_unconfirmed'
-      && issue.key.startsWith('flow_') === flow);
+    const issues = accountIssues(item,state.snapshot,geminiRow,flowRow?.recovering ? null : flowRow?.page ?? null)
+      .filter(issue => issue.key !== 'historical_unconfirmed' && issue.key.startsWith('flow_') === flow
+        && (!flowRow?.recovering || issue.key !== 'flow_unknown'));
     const issueBadges = issues.filter(issue => !['quota_stale', 'flow_paused', 'flow_cooling', 'flow_empty', 'flow_unknown', 'unresolved', 'gemini_disabled', 'keepalive_disabled', 'keepalive_paused', 'gemini_confirmed_verification'].includes(issue.key));
     const hasBalance = typeof item.flow_balance === "number" && Number.isFinite(item.flow_balance) && item.flow_balance >= 0;
     const balance = hasBalance ? item.flow_balance.toLocaleString("zh-CN") : "—";
+    const dailyCredits = item.flow_daily_credits_remaining;
+    const flowDailyCredit = item.flow_balance_fresh === true && Number.isInteger(dailyCredits) && dailyCredits >= 0
+      ? `<small class="account-flow-daily" title="今日赠送积分剩余，已计入总余额">+${dailyCredits.toLocaleString("zh-CN")}</small>` : "";
     const freshness = !hasBalance ? "尚未读取" : item.flow_balance_fresh ? "最近读取" : "上次读取，可能已过期";
     const observed = typeof item.flow_balance_observed === "number" ? ` · ${dateTime(item.flow_balance_observed)}` : "";
-    const signIn = flowLoginNotice(flowRow?.page);
+    const signIn = flowLoginNotice(flowRow?.recovering ? null : flowRow?.page);
     const login = signIn?.label || (item.flow_login === 'verified' ? 'Flow 登录已核对' : 'Flow 登录待确认');
     const geminiUsage = item.gemini_usage?.current_5h?.usage_percentage;
     const weeklyUsage = item.gemini_usage?.weekly?.usage_percentage;
@@ -2649,15 +2674,16 @@ function renderAccounts() {
       (!channelReadFailed && state.channelStatus?.available === true && state.channelStatus.production_send_available === false) ||
       callState.data?.dispatch_eligible === false;
     const quotaKey = item.key.slice('flow-account-'.length);
+    const quotaRecovery = callState.data?.restriction === 'official_call_blocked' &&
+      callState.data?.block_reason === 'quota_or_rate_limit' && (geminiRow?.checking ? 'checking' : 'waiting');
     const geminiCard = geminiCardStatus(geminiReady, callBlocked,
-      officialQuotaReadFailed ? null : officialQuotaData?.accounts?.[quotaKey], Date.now()/1000);
+      officialQuotaReadFailed ? null : officialQuotaData?.accounts?.[quotaKey], Date.now()/1000, quotaRecovery);
     const flowIssues = flowRow?.issues || [];
     const geminiIssues = issues.filter(issue => !issue.key.startsWith('flow_') && issue.key !== 'quota_stale' && issue.key !== 'gemini_confirmed_verification');
     const windowIssue = flowWindowIssue(item.profile, state.snapshot);
     const flowActivity = flow && state.snapshotFresh ? flowAccountActivity(item, state.snapshot) : null;
     const flowProgress = flowActivity ? `<div class="account-flow-progress" role="progressbar" aria-label="Flow · ${esc(flowActivity.stage)}" title="任务 ${esc(flowActivity.taskId)} · ${esc(flowActivity.stage)}"></div>` : '';
-    const flowReason = flow ? flowAccountReason(item, state.snapshot, flowRow,
-      flowReadinessObservation?.pageChecks?.accounts?.[item.profile], flowActivity) : null;
+    const flowReason = flow ? flowAccountReason(item, state.snapshot, flowRow, flowRow?.page, flowActivity) : null;
     const flowBalancePending = flowReason?.balancePending;
     const flowFallback = (!flowReason?.showOnCard && !flowActivity && !flowReady && !flowRow?.recovering && !cooling && !flowPaused && !windowIssue && !flowIssues.length)
       ? ({blocked:'账号处于不可派发状态，等待就绪核对通过。', unknown:'账号状态尚未完成核对，等待下次检查。', checking:'正在验活，请稍候。'}[flowRow?.status] || '账号状态待核对，等待下次检查。') : '';
@@ -2672,10 +2698,10 @@ function renderAccounts() {
     const geminiStatusText = item.gemini_removed ? '已从号池删除' : geminiCard.label;
     const cardState = (flowOperatorPaused ? ' is-flow-operator-paused'
       : flow && flowPaused ? ' is-flow-paused' : flow && cooling ? ' is-flow-cooling' : '') + (needsAttention ? ' is-account-issue' : '');
-    const flowStatusText = pageIncident ? '已停派' : item.flow_operator_paused ? '手动暂停' : ['flow_landing','login','verification_required'].includes(flowRow?.page) ? '暂不派发'
+    const flowStatusText = pageIncident ? '已停派' : item.flow_operator_paused ? '手动暂停' : signIn ? '暂不派发'
       : item.flow_preflight_reasons?.length && !flowPaused && !cooling ? '自检未通过'
       : flowActivity && !flowPaused && !cooling ? flowActivity.stage
-      : flowBalancePending ? flowReason.label : readinessBadge(flowRow);
+      : flowRow?.recovering ? '自动恢复中' : flowBalancePending ? flowReason.label : readinessBadge(flowRow);
     const flowHealthClass = flowPaused ? 'is-paused' : cooling ? 'is-cooling' : flowStatusText === flowActivity?.stage
       ? 'is-running' : flowRow?.status !== 'ready' ? 'is-unknown' : '';
     const cooldownSeconds = typeof item.flow_cooldown_seconds === 'number' && Number.isFinite(item.flow_cooldown_seconds) && item.flow_cooldown_seconds > 0 ? item.flow_cooldown_seconds : null;
@@ -2695,7 +2721,8 @@ function renderAccounts() {
     const flowBalanceTitle = `积分余额${hasBalance && !item.flow_balance_fresh ? '（上次读取）' : ''}${flowNextCredit ? ' · 下次积分到账 ' + flowNextCredit : ''}`;
     const winRow = (state.snapshot?.flow_coordination?.windows || []).find(w => w.profile === item.profile && w.state === 'result_unknown' && w.task_id);
     const govRelease = winRow ? `<button type="button" class="button button-primary" style="margin-top:6px" data-govern-review="${esc(winRow.task_id)}" data-review-account="${esc(item.key)}">已核对，放行账号</button>` : '';
-    const geminiVerify = (geminiRow && geminiRow.status !== 'ready' && geminiRow.status !== 'queue') ? `<button type="button" class="button button-light" style="margin-top:6px" data-gemini-verify>开始 Gemini 验证</button>` : '';
+    const geminiVerify = (geminiRow && geminiRow.status !== 'ready' && geminiRow.status !== 'queue' && !geminiCard.automaticQuotaRecovery)
+      ? `<button type="button" class="button button-light" style="margin-top:6px" data-gemini-verify>开始 Gemini 验证</button>` : '';
     const removeGemini = item.gemini_registered && !item.gemini_removed
       ? `<button class="button button-light" type="button" data-remove-gemini="${accountKey}" aria-label="从 Gemini 号池删除 ${esc(identity)}"${item.gemini_busy ? ' disabled title="该账号正在处理 Gemini 请求"' : ''}>删除 Gemini 账号</button>` : '';
     const activeFlowTask = ownFlow.some(task => ['queued','running'].includes(task.status)
@@ -2718,7 +2745,7 @@ function renderAccounts() {
     const markup = `<article class="account-card${cardState}"${flow ? ` data-flow-account-key="${accountKey}"` : ` draggable="true" data-drag-key="${esc(quotaKey)}"`}>
       <div class="account-card-heading">${accountAvatarMarkup(identity, avatarModels)}<div class="account-identity"><h3 title="${esc(identity)}">${esc(identity)}</h3>${flow ? `<div class="account-card-meta"><span class="account-login ${signIn ? 'is-login-required' : item.flow_login === 'verified' ? 'is-ready' : ''}">${esc(login)}</span></div>` : ''}</div>
         <div class="account-detail-anchor"><details class="account-details"><summary aria-label="查看 ${esc(identity)} 的详细状态" aria-controls="account-detail-${accountKey}">详情</summary></details><div id="account-detail-${accountKey}" class="account-detail-popup"><strong>账号状态详情</strong>${flow ? `<p>Flow：${esc(flowStatusText)} · ${esc(freshness + observed)}。${hasBalance ? '剩余 ' + esc(balance) + ' 积分。' : ''}未提供积分总额度。</p>${coolingInfo ? `<p>${esc(coolingInfo)}</p>` : ''}${flowActivity ? `<p>当前任务 ${esc(flowActivity.taskId)} · ${esc(flowActivity.stage)}</p>` : ''}<p>Flow · ${esc(flowPerformance)}</p>` : `${officialDetails(official)}<p>Gemini · ${esc(gemPerformance)}</p>`}${issues.length ? `<div class="account-detail-issues"><strong>状态说明</strong>${issues.map(issue => `<p><b>${esc(issue.title)}</b><br>${esc(issue.impact)} ${esc(issue.action)}</p>`).join('')}</div>` : ''}</div></div></div>
-      <div class="account-services account-services-single">${flow ? `<div class="account-service account-service-flow${flowOperatorPaused ? ' is-service-operator-paused' : ''}${flowNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc(('Flow：' + flowStatusText))}" title="${esc(('Flow：' + flowStatusText))}"><div class="account-service-heading"><span>Flow</span>${flowProgress}<strong class="account-health ${flowHealthClass}">${esc(flowStatusText)}</strong></div><div class="account-flow-value"><div title="${esc(flowBalanceTitle)}"><strong>${esc(balance)}</strong><small class="account-flow-daily" title="${esc(flowDailyCreditHint)}">${esc(flowDailyCreditLabel)}</small><small class="account-quota-reset">下次积分到账 ${esc(flowNextCredit || '待官方更新')}${flowNextCredit && !item.flow_balance_fresh ? '（上次读取）' : ''}</small></div>${cooling ? `<div class="account-cooldown" data-risk-paused="${flowPaused}"${cooldownEnd !== null ? '' : ' aria-label="冷却中，剩余时间待核对"'}><span class="account-cooldown-time">—</span><span class="account-cooldown-label">冷却中</span></div>` : ''}</div></div>` : `<div class="account-service account-service-gemini${geminiNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}" title="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}"><div class="account-service-heading"><span>Gemini</span><strong class="account-health${geminiReady && !geminiNeedsAttention ? '' : ' is-unknown'}">${esc(geminiStatusText)}</strong></div>${item.gemini_removed ? '' : `<div data-account-quota="${accountKey}">${quotaView.html}</div>`}</div>`}</div>
+      <div class="account-services account-services-single">${flow ? `<div class="account-service account-service-flow${flowOperatorPaused ? ' is-service-operator-paused' : ''}${flowNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc(('Flow：' + flowStatusText))}" title="${esc(('Flow：' + flowStatusText))}"><div class="account-service-heading"><span>Flow</span>${flowProgress}<strong class="account-health ${flowHealthClass}">${esc(flowStatusText)}</strong></div><div class="account-flow-value"><div title="${esc(flowBalanceTitle)}"><strong>${esc(balance)}</strong>${flowDailyCredit}<small class="account-quota-reset">下次积分到账 ${esc(flowNextCredit || '待官方更新')}${flowNextCredit && !item.flow_balance_fresh ? '（上次读取）' : ''}</small></div>${cooling ? `<div class="account-cooldown" data-risk-paused="${flowPaused}"${cooldownEnd !== null ? '' : ' aria-label="冷却中，剩余时间待核对"'}><span class="account-cooldown-time">—</span><span class="account-cooldown-label">冷却中</span></div>` : ''}</div></div>` : `<div class="account-service account-service-gemini${geminiNeedsAttention ? ' is-service-issue' : ''}" role="group" aria-label="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}" title="${esc('Gemini：'+geminiStatusText+(quotaView.message ? ' · '+quotaView.message : ''))}"><div class="account-service-heading"><span>Gemini</span><strong class="account-health${geminiReady && !geminiNeedsAttention ? '' : ' is-unknown'}">${esc(geminiStatusText)}</strong></div>${item.gemini_removed ? '' : `<div data-account-quota="${accountKey}">${quotaView.html}</div>`}</div>`}</div>
       ${flow ? flowNetworkSlot(item.exit_info) : ''}
       ${flow && flowReason?.showOnCard ? flowNotice : ''}
       ${!flow && geminiRow?.checking ? `<p class="account-check-status">Gemini · ${esc(geminiRow.note || '正在检查云端响应')}</p>` : ''}
@@ -3942,6 +3969,7 @@ function materialSize(bytes) {
 function materialSource(origin) {
   if (origin.source === 'studiowright') return 'StudioWright';
   if (origin.source === 'windows_local') return 'Windows 素材';
+  if (origin.source === 'api_upload') return 'API 导入';
   if (origin.source === 'flow2api-windows') return 'Flow2API · Windows';
   if (origin.source === 'flow2api-ubuntu') return 'Flow2API · Ubuntu';
   return origin.source || '原来源未记录';
@@ -4722,14 +4750,38 @@ function updateDispatchState(paused) {
   const detail = document.querySelector('[data-gemini-dispatch-state]');
   if (detail) detail.textContent = dispatchStateText(state.dispatchPaused);
 }
+function renderConcurrencyUsage(service, active, maximum, paused, detail = '') {
+  const meter = $(service + 'ConcurrencyMeter');
+  const output = $(service + 'ConcurrencyUsageText');
+  if (!meter || !output) return;
+  const fill = meter.firstElementChild;
+  const known = Number.isInteger(active) && active >= 0 && Number.isInteger(maximum) && maximum > 0;
+  meter.classList.toggle('is-unknown', !known);
+  if (!known) {
+    meter.removeAttribute('aria-valuenow');
+    meter.removeAttribute('aria-valuemax');
+    output.textContent = '并发暂不可读取';
+    fill.style.width = '0%';
+    return;
+  }
+  const occupied = Math.min(active, maximum);
+  const usage = (paused ? '维护中 · ' : '') + `占用 ${active} / ${maximum}${detail}`;
+  meter.setAttribute('aria-valuenow', String(occupied));
+  meter.setAttribute('aria-valuemax', String(maximum));
+  if (output.textContent !== usage) output.textContent = usage;
+  fill.style.width = `${occupied * 100 / maximum}%`;
+}
+
 function showDispatchConcurrency(data) {
   const occupied=flowOccupiedSlots(data);
-  if (!Number.isInteger(data.maximum) || data.maximum < 1 || data.maximum > 5 || !Number.isInteger(occupied)) throw new Error('并发设置暂不可读取。');
-  updateDispatchState(data.available === true ? data.paused : null);
+  if (data.available !== true || !Number.isInteger(data.maximum) || data.maximum < 1 || data.maximum > 5 ||
+      !Number.isInteger(occupied) || occupied < 0) throw new Error('并发设置暂不可读取。');
+  updateDispatchState(data.paused);
   dispatchConcurrencyMaximum = data.maximum;
   $('dispatchConcurrency').value = String(data.maximum);
   $('dispatchConcurrency').disabled = false;
   const following=data.background_videos ? ` · 视频跟进 ${data.background_videos}` : '';
+  renderConcurrencyUsage('flow', occupied, data.maximum, data.paused, following);
   $('dispatchConcurrencyStatus').textContent = data.paused ? '维护中' : `占用 ${occupied} / ${data.maximum}${following}`;
   $('dispatchConcurrencyStatus').title = 'Flow 确认接收视频后释放派发名额，成片继续在后台跟进。调低名额时，已有任务继续完成。';
 }
@@ -4743,6 +4795,7 @@ async function refreshDispatchConcurrency() {
   } catch (error) {
     if (sequence !== dispatchConcurrencySequence || dispatchConcurrencySaving) return;
     updateDispatchState(null);
+    renderConcurrencyUsage('flow');
     $('dispatchConcurrency').disabled = true;
     $('dispatchConcurrencyStatus').textContent = '并发设置暂不可读取';
   }
@@ -4768,8 +4821,6 @@ $('dispatchConcurrency').addEventListener('change', async () => {
 const geminiConcurrencyInput = $('geminiConcurrency');
 const geminiConcurrencySave = $('geminiConcurrencySave');
 const geminiConcurrencyStatus = $('geminiConcurrencyStatus');
-const geminiConcurrencyMeter = $('geminiConcurrencyMeter');
-const geminiConcurrencyUsageText = $('geminiConcurrencyUsageText');
 let geminiConcurrencyMaximum = null;
 let geminiConcurrencySequence = 0;
 let geminiConcurrencySaving = false;
@@ -4779,24 +4830,6 @@ function updateGeminiConcurrencyButton() {
   geminiConcurrencySave.disabled = geminiConcurrencySaving || geminiConcurrencyInput.disabled ||
     !geminiConcurrencyDirty || !geminiConcurrencyInput.validity.valid ||
     Number(geminiConcurrencyInput.value) === geminiConcurrencyMaximum;
-}
-
-function showGeminiConcurrencyUsage(data) {
-  geminiConcurrencyMeter.classList.toggle('is-unknown', !data);
-  const fill = geminiConcurrencyMeter.firstElementChild;
-  if (!data) {
-    geminiConcurrencyMeter.removeAttribute('aria-valuenow');
-    geminiConcurrencyMeter.removeAttribute('aria-valuemax');
-    geminiConcurrencyUsageText.textContent = '并发暂不可读取';
-    fill.style.width = '0%';
-    return;
-  }
-  const occupied = Math.min(data.active, data.maximum);
-  const usage = (data.paused ? '维护中 · ' : '') + `占用 ${data.active} / ${data.maximum} · 排队 ${data.queued}`;
-  geminiConcurrencyMeter.setAttribute('aria-valuenow', String(occupied));
-  geminiConcurrencyMeter.setAttribute('aria-valuemax', String(data.maximum));
-  if (geminiConcurrencyUsageText.textContent !== usage) geminiConcurrencyUsageText.textContent = usage;
-  fill.style.width = `${occupied / data.maximum * 100}%`;
 }
 
 function showGeminiConcurrency(data, saved = false) {
@@ -4809,7 +4842,7 @@ function showGeminiConcurrency(data, saved = false) {
   geminiConcurrencyInput.disabled = false;
   if (!geminiConcurrencyDirty && (saved || document.activeElement !== geminiConcurrencyInput))
     geminiConcurrencyInput.value = String(data.maximum);
-  showGeminiConcurrencyUsage(data);
+  renderConcurrencyUsage('gemini', data.active, data.maximum, data.paused, ` · 排队 ${data.queued}`);
   geminiConcurrencyStatus.textContent = saved ? '已保存' : '';
   updateGeminiConcurrencyButton();
 }
@@ -4823,7 +4856,7 @@ async function refreshGeminiConcurrency() {
   } catch (_) {
     if (sequence !== geminiConcurrencySequence || geminiConcurrencySaving) return;
     if (geminiConcurrencyMaximum === null) geminiConcurrencyInput.disabled = true;
-    showGeminiConcurrencyUsage(null);
+    renderConcurrencyUsage('gemini');
     if (geminiConcurrencyMaximum === null) geminiConcurrencyStatus.textContent = '设置暂不可读取';
     updateGeminiConcurrencyButton();
   }
@@ -5244,12 +5277,6 @@ function renderOfficialQuota() {
   const refreshing = data?.refreshing === true;
   const number = value => value == null ? '—' : value.toFixed(2).replace(/\.00$/, '') + '%';
   const resetText = seconds => typeof seconds === 'number' ? `最近恢复 ${dateTime(seconds)}` : '恢复时间以官方状态为准';
-  const taskKnown = state.snapshot?.flow_state?.available === true && Array.isArray(state.snapshot?.tasks);
-  const tasks = taskKnown ? state.snapshot.tasks.filter(t=>['image','video'].includes(t.kind)) : [];
-  const completed = tasks.filter(t=>t.status==='succeeded').length;
-  const failed = tasks.filter(t=>t.status==='failed').length;
-  const success = completed+failed ? Math.round(completed/(completed+failed)*100) : null;
-  $('flowSuccessOverview').innerHTML = `<div class="quota-window-label"><span>FLOW · 图片 / 视频成功率</span><strong>${success == null ? '—' : success+'%'}<small> 任务成功率</small></strong></div><div class="quota-track ${success == null ? 'is-unknown' : ''}" ${success == null ? 'role="img" aria-label="Flow 任务成功率未知"' : `role="progressbar" aria-label="Flow 图片与视频任务成功率" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${success}"`}><i data-quota-fill="${success ?? 0}"></i></div><span class="quota-reset">${taskKnown ? `${completed} 成功 · ${failed} 失败 · 含任务下载阶段` : '任务记录暂未读取'}</span>`;
   const accounts = state.snapshot?.real_accounts?.items || [];
   const names = new Map(accounts.map(a=>[a.key.replace(/^flow-account-/,''),a.email || a.label || a.profile]));
   const rows = Object.entries(data?.accounts || {});
@@ -5273,20 +5300,20 @@ function renderOfficialQuota() {
   const advanced = data?.advanced_pool;
   const advancedDispatch = state.channelStatus?.dispatch?.advanced_pool;
   const advancedRows = Object.entries(advanced?.accounts || {});
-  const hydrogenRows = advancedRows.filter(([,row]) => row.models?.includes(hydrogenMedium));
   const now = Date.now()/1000;
+  const freshRows = rows.filter(([,row])=>now-row.checked_at >= 0 && now-row.checked_at <= 600);
   const sharedWindowMarkup = ['five_hour','weekly'].map(window=>{
-    const values = hydrogenRows
-      .filter(([,row])=>now-row.checked_at >= 0 && now-row.checked_at <= 600)
+    const values = freshRows
       .map(([,row])=>savedQuotaValue(row,window))
       .filter(value=>value!==null);
     const average = values.length ? Math.round(values.reduce((sum,value)=>sum+value,0)/values.length*100)/100 : null;
     const title = window === 'five_hour' ? '5 小时' : '每周';
     const meter = average === null ? `role="img" aria-label="${title}额度待读取"`
       : `role="progressbar" aria-label="${title}平均剩余额度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${average}"`;
-    return `<div class="quota-shared-window"><span>${title}额度</span><strong>${average === null ? '待读取' : number(average)}${average === null ? '' : '<small>平均剩余</small>'}</strong><div class="quota-track${average === null ? ' is-unknown' : ''}" ${meter}><i data-quota-fill="${average ?? 0}"></i></div><em>${values.length} / ${hydrogenRows.length} 个账号已读</em></div>`;
+    const coverage = rows.length ? `<em>${values.length} / ${rows.length} 个账号已读</em>` : '';
+    return `<div class="quota-shared-window"><span>${title}额度</span><strong>${average === null ? '待读取' : number(average)}${average === null ? '' : '<small>平均剩余</small>'}</strong><div class="quota-track${average === null ? ' is-unknown' : ''}" ${meter}><i data-quota-fill="${average ?? 0}"></i></div>${coverage}</div>`;
   }).join('');
-  const sharedTopMarkup = advanced ? `<article class="quota-shared-card"><div class="quota-shared-heading"><strong>HY 默认池额度</strong><span>Gemini Models 共享</span></div><div class="quota-shared-windows">${sharedWindowMarkup}</div><p>按已开通 HY 中档且近期读到额度的账号取平均。</p></article>` : '';
+  const sharedTopMarkup = `<article class="quota-shared-card"><div class="quota-shared-heading"><strong>Gemini 共享额度</strong><span>近 10 分钟读数</span></div><div class="quota-shared-windows">${sharedWindowMarkup}</div><p>同一账号的各 Gemini 模型共用额度。</p></article>`;
   const advancedQuotaMarkup = advancedRows.length ? `
     <div class="quota-table-wrap">
       <table aria-label="高级模型账号额度">
@@ -5306,7 +5333,7 @@ function renderOfficialQuota() {
   const coverage = refreshing ? `正在读取 ${known} / ${total} 个账号` : known ? `已保存 ${known} / ${total} 个账号${known<total ? ' · 汇总仅含已读账号' : ''}` : '额度暂未获取';
   target.setAttribute('aria-busy',String(refreshing));
   $('geminiSharedQuota').innerHTML = sharedTopMarkup;
-  $('geminiQuotaBreakdown').innerHTML = `<div class="quota-footer"><div class="quota-source"><span>Gemini Models：${esc(coverage)}${checked.length ? ` · 更新于 ${esc(dateTime(Math.max(...checked)))}` : ''}</span></div><button type="button" class="quota-refresh" data-quota-action="refresh" ${refreshing || officialQuotaRequest ? 'disabled' : ''}>${refreshing ? '额度读取中…' : '刷新 Gemini 额度'}</button></div><details class="quota-details" ${opened ? 'open' : ''}><summary data-quota-action="details">账号与普通 Gemini 额度明细<span>查看账号剩余与恢复时间</span></summary>${advancedQuotaMarkup}<div class="quota-table-wrap"><table><thead><tr><th>账号</th><th>5 小时剩余</th><th>每周剩余</th><th>状态 / 最近恢复</th></tr></thead><tbody>${rowMarkup || `<tr><td colspan="4">${refreshing ? '正在读取额度…' : '额度暂未获取'}</td></tr>`}</tbody></table></div></details>`;
+  $('geminiQuotaBreakdown').innerHTML = `<div class="quota-footer"><div class="quota-source"><span>Gemini Models：${esc(coverage)}${checked.length ? ` · 更新于 ${esc(dateTime(Math.max(...checked)))}` : ''}</span></div><button type="button" class="quota-refresh" data-quota-action="refresh" ${refreshing || officialQuotaRequest ? 'disabled' : ''}>${refreshing ? '额度读取中…' : '刷新 Gemini 额度'}</button></div><details class="quota-details" ${opened ? 'open' : ''}><summary data-quota-action="details">账号额度明细<span>查看账号剩余与恢复时间</span></summary>${advancedQuotaMarkup}<div class="quota-table-wrap"><table><thead><tr><th>账号</th><th>5 小时剩余</th><th>每周剩余</th><th>状态 / 最近恢复</th></tr></thead><tbody>${rowMarkup || `<tr><td colspan="4">${refreshing ? '正在读取额度…' : '额度暂未获取'}</td></tr>`}</tbody></table></div></details>`;
   target.querySelectorAll('[data-quota-fill]').forEach(meter=>{meter.style.width=Number(meter.dataset.quotaFill)+'%';});
   target.querySelector('[data-quota-action="refresh"]').addEventListener('click',()=>refreshOfficialQuota(true));
   if (focused) target.querySelector(`[data-quota-action="${focused}"]`)?.focus({preventScroll:true});

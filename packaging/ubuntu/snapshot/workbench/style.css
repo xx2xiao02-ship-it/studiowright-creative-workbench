@@ -840,26 +840,27 @@ td strong { color: #283b31; font-size: 13px; } td code { color: #7c8d82; font-si
   .dashboard-rings { grid-template-columns: 1fr; gap: 8px; }
 }
 #geminiQuotaOverview { margin: 0; }
-.quota-main { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 18px; margin: 0 20px; padding: 16px 0; border-top: 1px solid #e6ece7; }
+.quota-main { display: grid; grid-template-columns: minmax(260px,2fr) minmax(0,3fr); gap: 18px; margin: 0 20px; padding: 16px 0; border-top: 1px solid #e6ece7; }
+.usage-metrics { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px 16px; align-content: start; min-width: 0; }
 .quota-window { min-width: 0; }
 .quota-window-label { display: flex; flex-direction: column; align-items: flex-start; gap: 7px; margin-bottom: 10px; font-size: 11px; color: #5b7663; }
 .quota-window-label strong { font-size: 25px; line-height: 1.25; font-variant-numeric: tabular-nums; color: #35684d; letter-spacing: -.02em; }
-.quota-window-label small { font-size: 11px; font-weight: 400; color: #51675c; letter-spacing: 0; white-space: nowrap; }
+.quota-window-label small { margin-left: 5px; font-size: 10px; font-weight: 400; color: #51675c; letter-spacing: 0; white-space: nowrap; }
 .quota-track,.quota-account-track { height: 7px; overflow: hidden; background: #e9efeb; border-radius: 8px; }
 .quota-track i,.quota-account-track i { width: 0; height: 100%; display: block; background: #689e7d; border-radius: inherit; }
 .quota-track.is-unknown { background: repeating-linear-gradient(120deg,#edf1ee,#edf1ee 5px,#e1e8e3 5px,#e1e8e3 8px); }
-.gemini-concurrency-usage { margin-top: 16px; padding-top: 12px; border-top: 1px solid #e6ece7; }
-.gemini-concurrency-usage-header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 10px; margin-bottom: 8px; color: #23536c; font-size: 12px; }
-.gemini-concurrency-usage-header span { font-variant-numeric: tabular-nums; }
-.gemini-concurrency-usage .quota-track:not(.is-unknown) { background: #e6eef4; }
-.gemini-concurrency-usage .quota-track i { background: #5b83a3; transition: width .35s ease; }
-.gemini-concurrency-usage .quota-track.is-unknown i { visibility: hidden; }
+.concurrency-usage { padding-top: 10px; border-top: 1px solid #e6ece7; min-width: 0; }
+.concurrency-usage-header { display: grid; gap: 4px; margin-bottom: 8px; color: #23536c; font-size: 12px; }
+.concurrency-usage-header span { font-size: 11px; font-variant-numeric: tabular-nums; }
+.concurrency-usage .quota-track:not(.is-unknown) { background: #e6eef4; }
+.concurrency-usage .quota-track i { background: #5b83a3; transition: width .35s ease; }
+.concurrency-usage .quota-track.is-unknown i { visibility: hidden; }
 .quota-reset { display: block; margin-top: 8px; color: #51675c; font-size: 11px; }
 .quota-footer { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 10px 20px; background: #f4f8f5; font-size: 12px; color: #51675c; }
 .quota-source { display: grid; gap: 3px; }
 .quota-refresh { flex: none; border: 0; padding: 6px 0; background: none; color: #367057; font-size: 12px; font-weight: 600; }
 .quota-details,.dashboard-runtime-details { border-top: 1px solid #e8eee9; font-size: 12px; }
-.quota-shared-slot { grid-column: span 2; min-width: 0; }
+.quota-shared-slot { min-width: 0; }
 .quota-shared-slot:empty { display: none; }
 .quota-shared-card { padding: 14px; border: 1px solid #e3ebe5; border-radius: 10px; background: #f8fbf9; }
 .quota-shared-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; color: #385b45; }
@@ -898,9 +899,11 @@ td strong { color: #283b31; font-size: 13px; } td code { color: #7c8d82; font-si
  .dashboard-runtime-columns { grid-template-columns: 1fr; }
  .dashboard-runtime-columns article + article { border-left: 0; border-top: 1px solid #e8eee9; padding: 20px 0 0; }
 }
+@media (max-width: 760px) {
+ .quota-main { grid-template-columns: minmax(0,1fr); }
+}
 @media (max-width: 600px) {
- .quota-main { grid-template-columns: repeat(2,minmax(0,1fr)); margin-inline: 14px; }
- .quota-window-flow { grid-column: 1 / -1; }
+ .quota-main { margin-inline: 14px; }
  .quota-window-label strong { font-size: 23px; }
  .quota-footer { flex-wrap: wrap; gap: 6px; }
  .quota-source { line-height: 1.7; }

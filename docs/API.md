@@ -125,7 +125,7 @@ print(submission["model"])
 
 Google Antigravity 公告将于 2026 年 11 月 30 日移除 Gemini 3.8 Flash。Flash 保底受供应商实际可用性约束。[Google 模型说明](https://antigravity.google/docs/models?app=antigravity#reasoning-model)
 
-**账号与额度监控**可在工作台「操作台 → HY 默认池额度」查看。总览只统计已开通 Hydrogen 中档的账号，对每个窗口的近期已读剩余比例取平均。工作台本机面板端口 `18920` 的 `GET /api/channel-status` 返回默认文字模型 `dispatch.model` 与 `dispatch.advanced_pool`。`GET /api/official-quota` 返回各账号的 5 小时和每周剩余与恢复时间。`advanced_pool.quota_scope` 为 `gemini_models_shared`，表示这些数值来自各账号的官方 Gemini Models 共享额度。`advanced_pool.windows.*.total_remaining_percent` 是可读账号剩余百分比的合计，`average_remaining_percent` 是账号平均剩余。两个监控接口由面板提供，程序调用端口 `18922` 提供对话提交及结果查询。可读的高级账号每 5 分钟刷新。
+**账号与额度监控**可在工作台「操作台 → Gemini 共享额度」查看。总览覆盖已登记的 Gemini 账号。5 小时和每周额度分别统计最近 10 分钟内读到的账号平均剩余比例，并显示各自的已读账号数。工作台本机面板端口 `18920` 的 `GET /api/channel-status` 返回默认文字模型 `dispatch.model` 与 `dispatch.advanced_pool`。`GET /api/official-quota` 返回各账号的 5 小时和每周剩余与恢复时间。`advanced_pool.quota_scope` 为 `gemini_models_shared`，表示这些数值来自各账号的官方 Gemini Models 共享额度。`advanced_pool.windows.*.total_remaining_percent` 是可读账号剩余百分比的合计，`average_remaining_percent` 是账号平均剩余。两个监控接口由面板提供，程序调用端口 `18922` 提供对话提交及结果查询。可读的高级账号每 5 分钟刷新。
 
 接着问时沿用 `conversation_id`，为新消息生成新的请求编号。原账号受限时续聊暂缓。自动分配的新请求仅在确认还未发送时允许切换账号。查回复用下方「结果与下载」中的 Gemini 查询接口。
 
@@ -456,6 +456,41 @@ if record.get("task_id"):
 已入库素材：`GET /api/library?page=1&limit=24` 查列表，`GET /api/library/{素材ID}` 查详情，`GET /api/library/{素材ID}/file` 下载原文件。
 
 错误通常返回 `{"error":"原因"}`。`401` 检查密钥，`400` 检查请求参数，`404` 核对路径或编号，`409` 先查询原任务。`GET /health` 检查 18922 API 是否可访问，无需密钥。
+
+## 现成素材查重入库
+
+**`POST /api/library/import?filename=原文件名&sha256=校验值`** 使用同一工作台 Bearer 密钥。请求正文传一个文件的原始字节，使用 `application/octet-stream` 和文件大小 `Content-Length`。文件名需 URL 编码并包含扩展名。`sha256` 可省略，提供时服务会核对实际收到的内容。
+
+支持 JPG、JPEG、PNG、WebP、GIF、BMP、AVIF、MP4、MOV、WebM、WAV 和 M4A。单个文件上限 1 GiB，超限返回 `413`。
+
+- `201` 表示新增素材，`200` 并带有 `deduplicated: true` 表示复用已有素材。回复包含 `asset_id`、`media_type` 和下载地址 `path`。
+- `asset_id` 是文件内容的 SHA-256。重复上传同一内容会返回相同编号。改名再上传会保留新原名供搜索，素材库仍只有一份内容。
+- 上传前可用 `GET /api/library/{SHA-256}` 查重。若需要确认原文件也能取回，可对返回的 `url` 发起带 `Range: bytes=0-0` 的 GET。
+
+```python
+import hashlib
+from urllib.parse import urlencode
+from urllib.error import HTTPError
+
+file = Path("待入库素材.mp4")
+with file.open("rb") as stream:
+    sha = hashlib.file_digest(stream, "sha256").hexdigest()
+
+try:
+    existing = call("/api/library/" + sha)
+except HTTPError as error:
+    if error.code != 404:
+        raise
+    query = urlencode({"filename": file.name, "sha256": sha})
+    headers = {**AUTH, "Content-Type": "application/octet-stream",
+               "Content-Length": str(file.stat().st_size)}
+    with file.open("rb") as stream:
+        request = Request(BASE + "/api/library/import?" + query, data=stream, headers=headers)
+        with HTTP.open(request, timeout=190) as response:
+            print(json.load(response))
+else:
+    print({"asset_id": existing["id"], "deduplicated": True, "path": existing["url"]})
+```
 
 ## 音乐生成与音频
 

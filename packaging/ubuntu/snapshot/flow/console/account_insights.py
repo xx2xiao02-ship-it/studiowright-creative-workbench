@@ -7,6 +7,7 @@ import json
 import math
 import sqlite3
 import time
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -25,14 +26,26 @@ class Insights:
             profile TEXT PRIMARY KEY,balance REAL,observed REAL,checked REAL,
             status TEXT,error TEXT)""")
         store.execute("CREATE TABLE IF NOT EXISTS account_credit_renewals(profile TEXT PRIMARY KEY,next_date TEXT,observed REAL)")
+        store.execute("CREATE TABLE IF NOT EXISTS account_daily_credits(profile TEXT PRIMARY KEY,remaining INTEGER,observed REAL)")
 
-    def record(self, profile, balance=None, error=None, now=None, next_credit_date=None, *, transient=False):
+    def record(self, profile, balance=None, error=None, now=None, next_credit_date=None, *,
+               transient=False, daily_credits_remaining=None):
         now = time.time() if now is None else now
         if error is None and number(balance) is None:
             raise ValueError('余额不正确。')
         if error is None:
-            self.store.execute("INSERT INTO account_balances VALUES(?,?,?,?,'ready',NULL) ON CONFLICT(profile) DO UPDATE SET balance=excluded.balance,observed=excluded.observed,checked=excluded.checked,status='ready',error=NULL", (profile, balance, now, now))
-            self.store.execute("INSERT INTO account_credit_renewals VALUES(?,?,?) ON CONFLICT(profile) DO UPDATE SET next_date=excluded.next_date,observed=excluded.observed", (profile,next_credit_date,now))
+            if type(daily_credits_remaining) is not int or not 0 <= daily_credits_remaining <= balance:
+                daily_credits_remaining = None
+            with closing(self.store.connect()) as db, db:
+                db.execute("""INSERT INTO account_balances VALUES(?,?,?,?,'ready',NULL)
+                    ON CONFLICT(profile) DO UPDATE SET balance=excluded.balance,observed=excluded.observed,
+                    checked=excluded.checked,status='ready',error=NULL""", (profile, balance, now, now))
+                db.execute("""INSERT INTO account_credit_renewals VALUES(?,?,?)
+                    ON CONFLICT(profile) DO UPDATE SET next_date=excluded.next_date,observed=excluded.observed""",
+                    (profile, next_credit_date, now))
+                db.execute("""INSERT INTO account_daily_credits VALUES(?,?,?)
+                    ON CONFLICT(profile) DO UPDATE SET remaining=excluded.remaining,observed=excluded.observed""",
+                    (profile, daily_credits_remaining, now))
         else:
             self.store.execute("""INSERT INTO account_balances VALUES(?,NULL,NULL,?,'unknown',?)
                 ON CONFLICT(profile) DO UPDATE SET checked=excluded.checked,error=excluded.error,
@@ -57,7 +70,8 @@ class Insights:
     def report(self, accounts, now=None, refreshing=False):
         now=time.time() if now is None else now
         jobs,cached,source_readable=self.source_data()
-        balances={r['profile']:r for r in self.store.rows('SELECT * FROM account_balances')}
+        balances={r['profile']:r for r in self.store.rows("""SELECT b.*, d.remaining AS daily_credits_remaining
+            FROM account_balances b LEFT JOIN account_daily_credits d USING(profile, observed)""")}
         renewals={r['profile']:r for r in self.store.rows('SELECT * FROM account_credit_renewals')}
         rows=[]
         for a in accounts:
@@ -66,6 +80,8 @@ class Insights:
                 b={**cached[a['profile']], 'status':b.get('status','cached'),'error':b.get('error'),'checked':b.get('checked')}
             value=number(b.get('balance'));observed=number(b.get('observed'))
             fresh=value is not None and observed is not None and 0<=now-observed<=FRESH_SECONDS and b.get('status') in ('ready','retrying')
+            daily_credits = (b.get('daily_credits_remaining')
+                             if fresh and b.get('status') == 'ready' and a.get('state') == 'verified' else None)
             if a.get('flow_page_incident'):health,reason='paused','页面显示异常活动，等待人工核查'
             elif a.get('operator_paused') is True:health,reason='paused','已手动暂停 Flow 派发'
             elif a.get('risk_paused') is True:health,reason='paused','多次异常，等待人工核查后恢复'
@@ -79,6 +95,7 @@ class Insights:
             else:health,reason='ready','最近登录已核对、未冷却且有余额'
             rows.append({'profile':a['profile'],'email':a.get('email'), 'health':health,'reason':reason,
                          'balance':value,'balance_observed':observed,'balance_checked':b.get('checked'),
+                         'daily_credits_remaining':daily_credits,
                          'next_credit_date':renewals.get(a['profile'],{}).get('next_date'),
                          'balance_fresh':fresh,'balance_error':b.get('error')})
         profiles={a['profile'] for a in accounts}

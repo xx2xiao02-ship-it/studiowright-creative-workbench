@@ -21,6 +21,7 @@ from media_analysis import audio_duration
 
 
 AUDIO_CATEGORIES = ("music", "sound_effect", "other")
+ARCHIVE_MAX_BYTES = 1024**3
 # Keep the displayed category and database filter identical for shared files.
 AUDIO_CATEGORY_SQL = """
     COALESCE(
@@ -93,7 +94,7 @@ class Library(TagIndex):
         finally:
             c.close()
 
-    def archive(self, path, meta, expected=None, *, max_bytes=1024**3):
+    def archive(self, path, meta, expected=None, *, max_bytes=ARCHIVE_MAX_BYTES, report_created=False):
         source, source_id = meta["source"], str(meta["source_id"])
         path = Path(path).resolve()
         if not path.is_file() or not 0 < path.stat().st_size <= max_bytes:
@@ -165,21 +166,6 @@ class Library(TagIndex):
             category = meta.get("details", {}).get("audio_category")
             if category not in AUDIO_CATEGORIES:
                 category = "music" if source == "flow_music" else "other"
-            existing = self.file(sha)
-            rel = existing.relative_to(self.root) if existing else self.object_path(
-                sha, ext, category if kind == "audio" else None)
-            dest = self.root / rel
-            dest.parent.mkdir(exist_ok=True)
-            if dest.exists():
-                if digest(dest) != sha:
-                    raise ValueError("目标文件校验失败，已保留原文件，未覆盖。")
-            else:
-                # Publish without replacing an existing immutable object.
-                try:
-                    os.link(stage, dest)
-                except FileExistsError:
-                    if digest(dest) != sha:
-                        raise ValueError("目标文件校验失败。") from None
             with self.connect() as c:
                 c.execute("BEGIN IMMEDIATE")
                 old = c.execute(
@@ -188,7 +174,21 @@ class Library(TagIndex):
                 ).fetchone()
                 if old and old["asset_id"] != sha:
                     raise ValueError("同一来源的文件内容发生变化，已保留原始记录，未覆盖。")
-                c.execute(
+                # Resolve the recorded path under the same transaction as the
+                # insert, so concurrent sources agree on one object location.
+                asset = c.execute("SELECT relative_path FROM assets WHERE id=?", (sha,)).fetchone()
+                rel = Path(asset["relative_path"]) if asset else self.object_path(
+                    sha, ext, category if kind == "audio" else None)
+                dest = (self.root / rel).resolve()
+                if not dest.is_relative_to(self.root / "objects"):
+                    raise ValueError("素材存储位置无法确认。")
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    os.link(stage, dest)
+                except FileExistsError:
+                    if digest(dest) != sha:
+                        raise ValueError("目标文件校验失败，已保留原文件，未覆盖。") from None
+                created = c.execute(
                     "INSERT OR IGNORE INTO assets VALUES(?,?,?,?,?,?,?,?,?,?)",
                     (
                         sha,
@@ -202,7 +202,7 @@ class Library(TagIndex):
                         duration,
                         time.time(),
                     ),
-                )
+                ).rowcount == 1
                 if kind == "audio" and duration is not None:
                     c.execute("UPDATE assets SET duration=? WHERE id=? AND duration IS NULL", (duration, sha))
                 columns = [
@@ -244,7 +244,7 @@ class Library(TagIndex):
                     c.execute("UPDATE index_jobs SET provenance=?,state=? WHERE asset_id=? AND state='pending'", (json.dumps(meta["index_provenance"]), meta.get("index_status", "pending"), sha))
                 if kind == "audio":
                     self.organize_audio(c, sha)
-            return sha
+            return (sha, created) if report_created else sha
         finally:
             stage.unlink(missing_ok=True)
 

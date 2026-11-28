@@ -257,6 +257,50 @@ class ImageCreditCompatibility(unittest.TestCase):
                 pool.close()
 
 
+class FlowDailyCreditDispatch(unittest.TestCase):
+    def test_automatic_dispatch_uses_confirmed_daily_credits_without_waiting_on_busy_accounts(self):
+        accounts = [{'profile': profile, 'flow_login': 'verified', 'flow_health': 'ready',
+                     'flow_balance_fresh': True, 'flow_risk_known': True, 'flow_risk_paused': False,
+                     'flow_pacing_known': True, 'flow_cooling': False}
+                    for profile in ('account-a', 'account-b')]
+        projects = [{'key': a['profile'], 'source_profile': a['profile'], 'source_id': str(uuid.uuid4())}
+                    for a in accounts]
+        payload = dict(kind='image', confirm=True, params=dict(prompt='Local fixture only',
+            model='nano-banana-2.1', aspect='16:9', count=1, resolution='360p', duration=4))
+        busy = [{'source_profile': 'account-b', 'status': 'running'}]
+        cases = [
+            ('verified gift', {}, [], 'auto', 'account-b'),
+            ('no gift', {'flow_daily_credits_remaining': 0}, [], 'auto', 'account-a'),
+            ('unknown gift', {'flow_daily_credits_remaining': None}, [], 'auto', 'account-a'),
+            ('outdated gift', {'flow_balance_fresh': False}, [], 'auto', 'account-a'),
+            ('busy gift account', {}, busy, 'auto', 'account-a'),
+            ('paused gift account', {'flow_health': 'paused'}, [], 'auto', 'account-a'),
+            ('specified project', {}, [], 'account-a', 'account-a'),
+        ]
+        for case, account_changes, tasks, project_key, expected in cases:
+            with self.subTest(case=case), fixture_directory() as directory:
+                pool = RealPool(directory / 'state', directory, browser_inventory=lambda: None)
+                gift_account = {'flow_daily_credits_remaining': 29, **account_changes}
+                snapshot = {'flow_state': {'available': True}, 'projects': projects, 'tasks': tasks,
+                            'real_accounts': {'available': True, 'items': [accounts[0], {**accounts[1], **gift_account}]},
+                            'flow_models': {'image': [{'id': 'nano-banana-2.1'}]}}
+                calls = []
+
+                def send(body):
+                    calls.append(body['profile'])
+                    return dict(id='fixture-task', profile=body['profile'], project=body['project'], kind=body['kind'])
+
+                try:
+                    request_id = str(uuid.uuid4())
+                    data = dict(payload, project_key=project_key)
+                    result, created = pool.submit_flow(data, request_id, snapshot, send)
+                    self.assertTrue(created)
+                    self.assertEqual(result['status'], 'submitted')
+                    self.assertEqual(calls, [expected])
+                finally:
+                    pool.close()
+
+
 class VideoAutoDispatchCompatibility(unittest.TestCase):
     def test_original_video_format_and_idempotency_without_provider(self):
         with fixture_directory() as directory:

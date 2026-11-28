@@ -522,12 +522,15 @@ class RealPool:
         return {'source': 'workbench', 'items': [dict(row) for row in rows]}
 
     def dialogue_statistics(self):
-        """Aggregate this workbench's dialogue records, excluding material analysis.
-
-        Rolling 7-day window: stale failures age out instead of polluting the UI.
-        """
+        """Return seven days of dialogue metrics and confirmed production outcomes."""
         cutoff = time.time() - 7 * 86400
         with self.connection() as db:
+            official_outcomes = dict(db.execute(
+                """SELECT COUNT(CASE WHEN r.status='completed' THEN 1 END) AS completed,
+                          COUNT(CASE WHEN r.status='failed' THEN 1 END) AS failed
+                   FROM requests r JOIN official_jobs j USING(request_id)
+                   WHERE r.created >= ? AND j.readiness_probe=0
+                     AND r.status IN ('completed','failed')""", (cutoff,)).fetchone())
             totals = dict(db.execute(
                 "SELECT COUNT(*) AS total,"
                 " SUM(CASE WHEN r.status='completed' THEN 1 ELSE 0 END) AS completed,"
@@ -564,7 +567,8 @@ class RealPool:
         for record in [totals,*accounts.values()]:
             for field in ('total','completed','failed','unresolved','processing','first_samples','total_samples'):
                 record[field]=record[field] or 0
-        return {'total':totals,'accounts':accounts,'token_count':None,'token_source':'unavailable'}
+        return {'total':totals,'accounts':accounts,'official_outcomes':official_outcomes,
+                'token_count':None,'token_source':'unavailable'}
 
     def _read_browser_inventory(self):
         if self.browser_inventory is None:
@@ -1353,10 +1357,17 @@ class RealPool:
             return {'key': self.flow_project_key(profile, project_id), 'source_profile': profile, 'source_id': project_id}
         pending = {profile: sum(1 for t in snapshot.get('tasks', []) if t.get('source_profile') == profile
                                 and t.get('status') in ('queued', 'running')) for profile in unique}
-        order = sorted(unique, key=lambda p: (pending[p], last.get(p) or 0, p))
+
+        def account_priority(profile):
+            account = unique[profile]
+            remaining = account.get('flow_daily_credits_remaining')
+            has_daily_credits = (account.get('flow_balance_fresh') is True
+                                 and type(remaining) is int and remaining > 0)
+            return pending[profile], not has_daily_credits, last.get(profile) or 0, profile
+
         projects = snapshot.get('projects', [])
         # Choose the account first; lack of a project must not skip its turn.
-        profile = order[0]
+        profile = min(unique, key=account_priority)
         owned = [p for p in projects if p.get('source_profile') == profile]
         if named_only:
             from flow_references import normalized_owner

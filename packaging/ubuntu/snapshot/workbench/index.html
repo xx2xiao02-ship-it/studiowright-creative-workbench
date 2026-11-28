@@ -71,14 +71,22 @@
             <div class="desk-usage">
               <section id="geminiQuotaOverview" class="dashboard-quotas" aria-label="Flow 任务与 Gemini 使用统计">
                 <div class="quota-main">
-                  <div class="quota-window-flow">
+                  <div class="usage-metrics">
                     <div id="flowSuccessOverview" class="quota-window"><p class="subtle">正在读取 Flow 成功率…</p></div>
-                    <div class="gemini-concurrency-usage">
-                      <div class="gemini-concurrency-usage-header">
-                        <strong id="geminiConcurrencyUsageLabel">Gemini 并发占用</strong>
+                    <div id="geminiSuccessOverview" class="quota-window"><p class="subtle">正在读取 Gemini 成功率…</p></div>
+                    <div class="concurrency-usage">
+                      <div class="concurrency-usage-header">
+                        <strong id="flowConcurrencyUsageLabel">Flow 并发</strong>
+                        <span id="flowConcurrencyUsageText">正在读取并发…</span>
+                      </div>
+                      <div id="flowConcurrencyMeter" class="quota-track is-unknown" role="progressbar" aria-labelledby="flowConcurrencyUsageLabel" aria-describedby="flowConcurrencyUsageText" aria-valuemin="0"><i aria-hidden="true"></i></div>
+                    </div>
+                    <div class="concurrency-usage">
+                      <div class="concurrency-usage-header">
+                        <strong id="geminiConcurrencyUsageLabel">Gemini 并发</strong>
                         <span id="geminiConcurrencyUsageText">正在读取并发…</span>
                       </div>
-                      <div id="geminiConcurrencyMeter" class="quota-track is-unknown" role="progressbar" aria-labelledby="geminiConcurrencyUsageLabel" aria-describedby="geminiConcurrencyUsageText"><i aria-hidden="true"></i></div>
+                      <div id="geminiConcurrencyMeter" class="quota-track is-unknown" role="progressbar" aria-labelledby="geminiConcurrencyUsageLabel" aria-describedby="geminiConcurrencyUsageText" aria-valuemin="0"><i aria-hidden="true"></i></div>
                     </div>
                   </div>
                   <div id="geminiSharedQuota" class="quota-shared-slot"></div>
@@ -692,6 +700,9 @@ if record.get("task_id"):
                     while chunk := res.read(65536):
                         output.write(chunk)</code></pre>
               <p>已入库素材：<code>GET /api/library?page=1&amp;limit=24</code> 查列表，<code>GET /api/library/{素材ID}</code> 查详情，<code>GET /api/library/{素材ID}/file</code> 下载原文件。</p>
+              <h3>现成素材查重入库</h3>
+              <div class="api-endpoint"><b>POST</b><code>/api/library/import?filename=原文件名&amp;sha256=校验值</code><span>使用工作台密钥，正文传原始文件，每次一个，最大 1 GiB。</span></div>
+              <p>图片、视频及 WAV／M4A 可入库。素材编号是文件内容的 SHA-256，可先用素材详情接口查重。上传返回 <code>asset_id</code> 和下载路径。重复内容返回原编号并标记 <code>deduplicated: true</code>。</p>
               <p>错误通常返回 <code>{"error":"原因"}</code>。<code>401</code> 检查密钥，<code>400</code> 检查请求参数，<code>404</code> 核对路径或编号，<code>409</code> 先查询原任务。<code>GET /health</code> 检查 18922 API 是否可访问，无需密钥。</p>
             </section>
             </div>

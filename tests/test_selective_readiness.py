@@ -74,13 +74,31 @@ class SelectiveReadiness(unittest.TestCase):
             self.assertIsNone(self.db.execute("SELECT 1 FROM requests WHERE request_id='new-probe'").fetchone())
 
     def test_flow_targets_exclude_ready_disabled_busy_and_review(self):
-        accounts=[dict(profile=k,repairable=k!='paused',review_task='old' if k=='review' else None)
-                  for k in ['healthy','paused','busy','pagebusy','review','broken','google_check','login']]
+        accounts=[dict(profile=k,repairable=k!='paused',review_task='old' if k=='review' else None,
+                       projects=[] if k=='no_project' else ['project'],
+                       automatic_recovery_blocked=k=='remote')
+                  for k in ['healthy','paused','busy','pagebusy','review','broken','google_check','login','remote','no_project']]
         payload=dict(accounts=accounts,busy=['busy'])
         checks=dict(healthy='ok',paused='binding',busy='binding',pagebusy='busy',review='draft',broken='binding',
-                    google_check='verification_required',login='login')
-        self.assertEqual([a['profile'] for a in readiness_repair_accounts(payload,checks)],['pagebusy','broken'])
-        self.assertEqual(len(payload['accounts']),8)
+                    google_check='verification_required',login='login',remote='project',no_project='binding')
+        selected = readiness_repair_accounts(payload, checks, automatic=True)
+        self.assertEqual([a['profile'] for a in selected], ['pagebusy', 'broken'])
+        self.assertEqual(len(payload['accounts']), 10)
+
+    def test_flow_state_reconnects_three_times_for_transient_connection_failures(self):
+        source = Sources()
+        scenarios = (
+            ([(None, 'offline', 'connection'), (None, 'offline', 'timeout'), ({'accounts': []}, None, None)],
+             {'accounts': []}, 3),
+            ([(None, 'offline', 'connection')] * 3, None, 3),
+            ([(None, 'sign in', 'http_403')], None, 1),
+        )
+        for replies, expected, attempts in scenarios:
+            with self.subTest(replies=replies), patch.object(source, '_read_once', side_effect=replies) as read, \
+                 patch('server.time.sleep'):
+                state, _ = source.read('flow', '/api/state', transient_retries=2)
+                self.assertEqual(state, expected)
+                self.assertEqual(read.call_count, attempts)
 
     def test_auto_recovery_refreshes_stale_credits_for_ready_idle_accounts(self):
         common=dict(email='fixture@example.invalid',flow_login='verified',
@@ -98,22 +116,29 @@ class SelectiveReadiness(unittest.TestCase):
         source=Sources()
         source.read=Mock(return_value=(state,None))
         source.refresh_flow_balances_once=Mock()
+        projects = [dict(source_profile=p, source_id='project-' + p) for p in profiles]
         response=lambda data:S(stdout=json.dumps(data).encode())
         with patch('server.account_rows',return_value=accounts), \
-             patch('server.project_rows',return_value=[]), \
+             patch('server.project_rows',return_value=projects), \
              patch('server.task_rows',return_value=tasks), \
-             patch('server.Path',side_effect=[S(read_bytes=lambda:sys.executable.encode()),Path(sys.executable)] * 2), \
+             patch('server.Path',side_effect=[S(read_bytes=lambda:sys.executable.encode()),Path(sys.executable)] * 4), \
              patch('server.subprocess.check_output',return_value='123'), \
              patch('server.subprocess.run',side_effect=[
                  response(before),
+                 response(before),
                  response({'cleaned':{'page':'ok','actions':['close_duplicate']},
                            'returned':{'page':'ok','actions':['return_to_project']},
-                           'partial':{'page':'binding','actions':['open_browser']}}),
-                 response(after), response(after), response(after),
+                           'partial':{'page':'binding','actions':['open_browser'],'attempts':3}}),
+                 response(after), response(after), response(after), response(after),
              ]) as run:
+            pending = source.flow_readiness()
             result=source.flow_readiness(repair=True,automatic=True)
             source.flow_readiness(repair=True,automatic=True)
-        self.assertFalse(json.loads(run.call_args_list[1].kwargs['input'])['reset_draft'])
+            passive = source.flow_readiness()
+        self.assertEqual(pending['recovery'], dict.fromkeys(('cleaned', 'returned', 'partial'), 'pending'))
+        self.assertEqual(result['recovery'], {'partial': 'failed'})
+        self.assertEqual(passive['recovery'], result['recovery'])
+        self.assertFalse(json.loads(run.call_args_list[2].kwargs['input'])['reset_draft'])
         self.assertEqual(result['accounts'],after)
         source.refresh_flow_balances_once.assert_called_once_with(['cleaned','returned','untouched'])
 

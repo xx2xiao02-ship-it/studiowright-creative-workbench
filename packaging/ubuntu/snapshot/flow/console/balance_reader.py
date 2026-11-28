@@ -1,10 +1,10 @@
-"""Read the account panel in an existing managed Flow tab; never create a tab.
+"""Read credit balances from the verified account's Flow and Google One pages.
 
-No login, navigation, project operations or generation. Uses the same per-account
-file lock as upstream tasks; refuses a different online identity.
+Keep the Flow project tab in place. The optional Google One read uses a
+temporary background tab. Uses the same per-account lock as upstream tasks.
 """
 import asyncio
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, suppress
 from pathlib import Path
 import hashlib
 import re
@@ -13,6 +13,11 @@ from balance_browser import FixedBalancePage
 
 ACCOUNT_PANEL = re.compile(r'^(账号详情|帐号详情|帳戶詳細資料|Account details|アカウントの詳細)$', re.I)
 CLOSE_PANEL = re.compile(r'^(关闭账号面板|Close account panel)$', re.I)
+CREDIT_ACTIVITY_URL = 'https://one.google.com/ai/activity?g1_landing_page=0&utm_source=flow'
+CREDIT_ACTIVITY_PAGE = re.compile(r'^https://one\.google\.com/(?:u/\d+/)?ai/activity(?:[?#].*)?$')
+DAILY_CREDITS_TEXT = re.compile(
+    r'(?:今天[还還]剩|You have)\s*(\d+)\s*'
+    r'(?:[个個]\s*Flow\s*(?:点数|點數|积分|積分)|Flow credits?\s*(?:remaining|left)\s*today)[。.]?', re.I)
 REVEAL_HEADER = """() => {
     const header = document.querySelectorAll('flow-tile-view-header.header-hidden');
     const views = document.querySelectorAll('.cdk-virtual-scrollable.page-container');
@@ -181,11 +186,42 @@ def parse_credit_renewal(text, now=None):
     return next(iter(values)) if len(values)==1 else None
 
 
+async def read_daily_credits(browser, email):
+    from playwright.async_api import Error as BrowserError
+
+    with suppress(BrowserError):
+        async with AsyncExitStack() as cleanup:
+            context = browser.contexts[0]
+            session = await browser.new_browser_cdp_session()
+            cleanup.push_async_callback(session.detach)
+            async with context.expect_page(timeout=2500) as opened:
+                target = (await session.send('Target.createTarget',
+                    {'url': CREDIT_ACTIVITY_URL, 'background': True}))['targetId']
+                cleanup.push_async_callback(session.send, 'Target.closeTarget', {'targetId': target})
+            page = await opened.value
+            page_session = await context.new_cdp_session(page)
+            try:
+                if (await page_session.send('Target.getTargetInfo'))['targetInfo']['targetId'] != target:
+                    return None
+            finally:
+                await page_session.detach()
+            await page.wait_for_url(CREDIT_ACTIVITY_PAGE, wait_until='domcontentloaded', timeout=2500)
+            summary = page.get_by_role('main').filter(has_text=DAILY_CREDITS_TEXT)
+            lines = (await summary.inner_text(timeout=2500)).splitlines()
+            values = [int(match[1]) for line in lines if (match := DAILY_CREDITS_TEXT.fullmatch(line.strip()))]
+            identity = page.get_by_role('button', name=re.compile(r'\(' + re.escape(email) + r'\)', re.I))
+            if len(values) == 1 and (await identity.count()) == 1 and CREDIT_ACTIVITY_PAGE.fullmatch(page.url):
+                return values[0]
+    return None
+
+
 async def read_balance(account, playwright, include_details=False, *, incident_root=None):
     from filelock import FileLock,Timeout
     from playwright.async_api import TimeoutError as BrowserTimeout
     from studiowright import chrome,paths
     from adapter import READ_STATE
+    loop=asyncio.get_running_loop()
+    details_deadline=loop.time()+18
     lock=FileLock(str(paths.locks_dir()/f"{account['profile']}.lock"))
     try:lock.acquire(timeout=0)
     except Timeout:raise BalanceReadDeferred('账号正在执行任务，余额稍后更新。') from None
@@ -227,7 +263,17 @@ async def read_balance(account, playwright, include_details=False, *, incident_r
                             pass
                 if not verify_identity(await page.evaluate(READ_STATE),email) or await page_url(page)!=checked_url:
                     raise ValueError('Flow 页面或账号发生变化，未保存余额。')
-                return {"balance":value,"next_credit_date":parse_credit_renewal(panel_text)} if include_details else value
+                if not include_details:
+                    return value
+                details = {'balance': value, 'next_credit_date': parse_credit_renewal(panel_text),
+                           'daily_credits_remaining': None}
+                # Give the optional read a short window inside the caller's 20 second limit.
+                budget = min(4, details_deadline - loop.time())
+                if budget > 0:
+                    with suppress(TimeoutError):
+                        details['daily_credits_remaining'] = await asyncio.wait_for(
+                            read_daily_credits(browser, email), timeout=budget)
+                return details
             await asyncio.sleep(.25)
         if not verify_identity(await page.evaluate(READ_STATE), email) or await page_url(page) != checked_url:
             raise ValueError('Flow 页面或账号发生变化，未保存余额。')

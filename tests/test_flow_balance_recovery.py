@@ -135,6 +135,31 @@ class BalanceRecovery(unittest.IsolatedAsyncioTestCase):
 
 
 class BalanceObservation(unittest.TestCase):
+    def test_daily_credits_require_a_current_verified_observation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = Store(root/'console-data')
+            store.execute('CREATE TABLE account_balances(profile TEXT PRIMARY KEY,balance REAL,observed REAL,'
+                          'checked REAL,status TEXT,error TEXT)')
+            store.execute("INSERT INTO account_balances VALUES('a',1050,1000,1000,'ready',NULL)")
+            insights = Insights(store, root/'source.db')
+            account = dict(profile='a', state='verified')
+
+            def remaining(now, state='verified'):
+                return insights.report([dict(account, state=state)], now=now)['accounts'][0]['daily_credits_remaining']
+
+            self.assertIsNone(remaining(1000))
+            insights.record('a', 1029, now=1001, daily_credits_remaining=29)
+            self.assertEqual(remaining(1001), 29)
+            self.assertIsNone(remaining(1001, state='attention'))
+            self.assertIsNone(remaining(1002 + FRESH_SECONDS))
+            insights.record('a', error='panel not ready', now=1002, transient=True)
+            self.assertIsNone(remaining(1002))
+            insights.record('a', 800, now=1003, daily_credits_remaining=0)
+            self.assertEqual(remaining(1003), 0)
+            insights.record('a', 800, now=1004)
+            self.assertIsNone(remaining(1004))
+
     def test_temporary_panel_failure_retains_only_a_recent_verified_observation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -180,7 +205,7 @@ class BalanceScheduler(unittest.IsolatedAsyncioTestCase):
             if len(started) == 2:
                 two_active.set()
             await release.wait()
-            return {'balance':12, 'next_credit_date':None}
+            return {'balance':12, 'next_credit_date':None, 'daily_credits_remaining':7}
 
         with patch.object(server, 'account_status', return_value=rows), \
              patch('balance_reader.read_balance', side_effect=panel):
@@ -196,6 +221,8 @@ class BalanceScheduler(unittest.IsolatedAsyncioTestCase):
         self.assertCountEqual(started, ['a', 'b', 'c'])
         self.assertEqual(slot.close.call_count, 3)
         self.assertEqual(console.insights.record.call_count, 3)
+        for profile in ('a', 'b', 'c'):
+            console.insights.record.assert_any_call(profile, 12, next_credit_date=None, daily_credits_remaining=7)
         self.assertFalse(console.balance_busy)
         self.assertFalse(console.balance_refreshing)
 

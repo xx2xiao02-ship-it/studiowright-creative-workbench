@@ -13,6 +13,10 @@ from unified_keys import UnifiedKeys
 from flow_references import MAX_BYTES as FLOW_REFERENCE_LIMIT, UPLOAD_ROUTE as FLOW_REFERENCE_UPLOAD
 
 
+LIBRARY_IMPORT_PATH = '/api/library/import'
+LIBRARY_IMPORT_LIMIT = 1024**3
+
+
 def allowed_route(method, target):
     parts = urlsplit(target)
     path = parts.path
@@ -35,6 +39,8 @@ def allowed_route(method, target):
             return 'workbench'
         if re.fullmatch(r'/api/tasks/[A-Za-z0-9_-]{1,128}(?:/files/[0-9]{1,4})?', path):
             return 'flow'
+    if method == 'POST' and path == LIBRARY_IMPORT_PATH:
+        return 'flow'
     if method == 'POST' and not parts.query:
         if re.fullmatch(r'/api/tasks/[A-Za-z0-9_-]{1,128}/retry', path):
             return 'flow'
@@ -88,17 +94,24 @@ def handler_for(store, upstream_port=18920, flow_port=18888):
             route = allowed_route(self.command, self.path)
             if not route:
                 return self.error_json(404, '接口不存在。')
+            library_import = self.command == 'POST' and urlsplit(self.path).path == LIBRARY_IMPORT_PATH
             flow_reference = FLOW_REFERENCE_UPLOAD.fullmatch(self.path) is not None
-            is_upload = flow_reference or self.path.startswith('/api/real-pool/uploads/')
+            is_upload = library_import or flow_reference or self.path.startswith('/api/real-pool/uploads/')
             size = 0
             if self.command == 'POST':
                 length = self.headers.get('Content-Length', '')
-                maximum = FLOW_REFERENCE_LIMIT if flow_reference else (100 * 1024 * 1024 if is_upload else 100000)
+                maximum = LIBRARY_IMPORT_LIMIT if library_import else (
+                    FLOW_REFERENCE_LIMIT if flow_reference else (100 * 1024 * 1024 if is_upload else 100000))
                 ctype = 'application/octet-stream' if is_upload else 'application/json'
-                if (self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length', [])) != 1 or not re.fullmatch(r'[0-9]{1,9}', length) or not 0 < int(length) <= maximum
+                if (self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length', [])) != 1
+                        or not re.fullmatch(r'[0-9]{1,10}', length) or int(length) == 0
                         or self.headers.get('Content-Type', '').split(';', 1)[0].strip().lower() != ctype):
                     return self.error_json(400, '请求内容格式或大小不正确。')
                 size = int(length)
+                if size > maximum:
+                    return self.error_json(413 if library_import else 400, '上传内容超出大小限制。')
+                if library_import:
+                    self.connection.settimeout(190)
             target_port = upstream_port if route == 'workbench' else flow_port
             headers = {'Host': f'127.0.0.1:{target_port}', 'Accept': self.headers.get('Accept', '*/*')}
             if self.command == 'POST':

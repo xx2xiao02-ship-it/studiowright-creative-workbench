@@ -208,9 +208,8 @@ test('Flow card distinguishes missing bindings from automatic credit updates', (
   assert.notEqual(vm.runInContext("flowAccountReason(account,{},row,'binding').showOnCard",context),true);
 });
 
-test('overview only averages the fresh shared quotas of the default HY pool', () => {
+test('overview averages each fresh shared quota across the whole Gemini account pool', () => {
   const now = 1800000000;
-  const flow = {};
   const shared = {};
   const breakdown = {};
   const target = {
@@ -219,37 +218,102 @@ test('overview only averages the fresh shared quotas of the default HY pool', ()
     contains: () => false,
     setAttribute() {}
   };
+  const accounts = {
+    hydrogen: {status:'ok', checked_at:now-30,
+      five_hour:{remaining_percent:100}, weekly:{remaining_percent:60}},
+    neon: {status:'ok', checked_at:now-60, five_hour:{remaining_percent:75}},
+    carbon: {status:'ok', checked_at:now-60,
+      five_hour:{remaining_percent:50}, weekly:{remaining_percent:30}},
+    flash: {status:'ok', checked_at:now-60,
+      five_hour:{remaining_percent:0}, weekly:{remaining_percent:100}},
+    stale: {status:'ok', checked_at:now-601,
+      five_hour:{remaining_percent:90}, weekly:{remaining_percent:100}},
+    unread: {status:'unavailable'}
+  };
   const context = vm.createContext({
-    $: id => ({geminiQuotaOverview:target, flowSuccessOverview:flow, geminiSharedQuota:shared, geminiQuotaBreakdown:breakdown})[id],
+    $: id => ({geminiQuotaOverview:target, geminiSharedQuota:shared, geminiQuotaBreakdown:breakdown})[id],
     document: {},
     state: {},
-    hydrogenMedium: 'gemini-4-hydrogen-medium',
+    dateTime: value => String(value),
     Date: {now: () => now * 1000},
     officialQuotaReadFailed: false,
     officialQuotaRequest: null,
     officialQuotaData: {
+      accounts,
       advanced_pool: {
         total_accounts: 3,
         accounts: {
-          first: {status:'ok', checked_at:now-30, models:['gemini-4-hydrogen-medium','gemini-4-neon-high'],
-            five_hour:{remaining_percent:100}, weekly:{remaining_percent:60}},
-          second: {status:'ok', checked_at:now-60, models:['gemini-4-neon-high'],
-            five_hour:{remaining_percent:75}},
-          stale: {status:'ok', checked_at:now-601, models:['gemini-4-hydrogen-medium'],
-            five_hour:{remaining_percent:0}, weekly:{remaining_percent:100}}
+          hydrogen: {...accounts.hydrogen,models:['gemini-4-hydrogen-medium','gemini-4-neon-high']},
+          neon: {...accounts.neon,models:['gemini-4-neon-high']},
+          carbon: {...accounts.carbon,models:['gemini-4-carbon-medium']}
         }
       }
     }
   });
   for (const name of ['esc', 'savedQuotaValue', 'savedQuotaSummary', 'renderOfficialQuota']) load(name, context);
   vm.runInContext('renderOfficialQuota()', context);
-  assert.match(flow.innerHTML, /FLOW · 图片 \/ 视频成功率/);
   assert.equal((shared.innerHTML.match(/class="quota-shared-card"/g) || []).length, 1);
-  assert.match(shared.innerHTML, /HY 默认池额度[^]*?Gemini Models 共享/);
-  assert.match(shared.innerHTML, /5 小时额度<\/span><strong>100%[^]*?aria-valuenow="100"[^]*?>1 \/ 2 个账号已读/);
-  assert.match(shared.innerHTML, /每周额度<\/span><strong>60%[^]*?aria-valuenow="60"[^]*?>1 \/ 2 个账号已读/);
-  assert.doesNotMatch(shared.innerHTML, /87\.50%|175%|120%/);
-  assert.match(breakdown.innerHTML, /账号与普通 Gemini 额度明细/);
+  assert.match(shared.innerHTML, /Gemini 共享额度[^]*?近 10 分钟读数/);
+  assert.match(shared.innerHTML, /5 小时额度<\/span><strong>56\.25%[^]*?aria-valuenow="56\.25"[^]*?>4 \/ 6 个账号已读/);
+  assert.match(shared.innerHTML, /每周额度<\/span><strong>63\.33%[^]*?aria-valuenow="63\.33"[^]*?>3 \/ 6 个账号已读/);
+  assert.match(breakdown.innerHTML, /账号额度明细/);
+  context.officialQuotaReadFailed = true;
+  vm.runInContext('renderOfficialQuota()', context);
+  assert.equal((shared.innerHTML.match(/<strong>待读取<\/strong>/g) || []).length, 2);
+  assert.doesNotMatch(shared.innerHTML, /aria-valuenow|个账号已读/);
+});
+
+test('overview calculates separate success rates from confirmed Flow and Gemini results', () => {
+  function metric() {
+    const bar = {style:{}};
+    return {bar, querySelector:() => bar};
+  }
+  const flow = metric();
+  const gemini = metric();
+  const snapshot = {
+    flow_state:{available:true},
+    tasks:[{kind:'image',status:'succeeded'},{kind:'video',status:'failed'},
+      {kind:'image',status:'queued'},{kind:'quote',status:'failed'}],
+    gemini_stats:{official_outcomes:{completed:4842,failed:20},total:{completed:9,failed:99}}
+  };
+  const context = vm.createContext({snapshot, $: id => ({flowSuccessOverview:flow,geminiSuccessOverview:gemini})[id]});
+  for (const name of ['esc','renderSuccessRate','renderOverviewSuccess']) load(name,context);
+  vm.runInContext('renderOverviewSuccess(snapshot)',context);
+  assert.match(flow.innerHTML, /Flow 成功率[^]*?<strong>50%<\/strong>[^]*?1 成功 · 1 失败/);
+  assert.equal(flow.bar.style.width,'50%');
+  assert.match(gemini.innerHTML, /Gemini 成功率[^]*?<strong>99\.59%<\/strong>[^]*?4,842 成功 · 20 失败/);
+  snapshot.gemini_stats.official_outcomes = {completed:0,failed:2};
+  vm.runInContext('renderOverviewSuccess(snapshot)',context);
+  assert.match(gemini.innerHTML, /<strong>0%<\/strong>/);
+  vm.runInContext('renderOverviewSuccess(null)',context);
+  assert.match(flow.innerHTML, /暂无已确认结果/);
+  assert.doesNotMatch(flow.innerHTML, /aria-valuenow/);
+});
+
+test('the two concurrency meters update independently and clear unavailable counts', () => {
+  function meter() {
+    const values = {};
+    return {values, firstElementChild:{style:{}}, classList:{toggle(){}},
+      setAttribute(key,value) {values[key]=value;}, removeAttribute(key) {delete values[key];}};
+  }
+  const flow = meter(), gemini = meter();
+  const flowText = {}, geminiText = {};
+  const context = vm.createContext({$: id => ({
+    flowConcurrencyMeter:flow,geminiConcurrencyMeter:gemini,flowConcurrencyUsageText:flowText,geminiConcurrencyUsageText:geminiText
+  })[id]});
+  load('renderConcurrencyUsage',context);
+  const render = (...args) => context.renderConcurrencyUsage(...args);
+  render('flow', 2, 5, false, ' · 视频跟进 1');
+  render('gemini', 7, 50, false, ' · 排队 3');
+  assert.equal(flow.firstElementChild.style.width,'40%');
+  assert.equal(flowText.textContent,'占用 2 / 5 · 视频跟进 1');
+  assert.equal(gemini.firstElementChild.style.width,'14%');
+  assert.equal(gemini.values['aria-valuenow'],'7');
+  assert.equal(geminiText.textContent,'占用 7 / 50 · 排队 3');
+  render('flow');
+  assert.equal(flow.values['aria-valuenow'],undefined);
+  assert.equal(flowText.textContent,'并发暂不可读取');
+  assert.equal(gemini.values['aria-valuenow'],'7');
 });
 
 test('Gemini account avatars distinguish Neon and Carbon independently', () => {
@@ -267,6 +331,21 @@ test('Gemini account avatars distinguish Neon and Carbon independently', () => {
   }
 });
 
+test('Gemini quota blocks show automatic recovery while Google verification stays available', () => {
+  const now = 1800000000;
+  const context = vm.createContext({});
+  load('geminiCardStatus', context);
+  const render = (quota, recovery, blocked = true) => context.geminiCardStatus(!blocked, blocked, quota, now, recovery);
+  const empty = {status:'ok', checked_at:now-10, five_hour:{remaining_percent:0}};
+  assert.equal(render(empty, 'waiting').label, '等待额度恢复');
+  assert.equal(render(empty, 'waiting').automaticQuotaRecovery, true);
+  assert.equal(render(null, 'waiting').label, '等待自动复查');
+  assert.equal(render(null, 'checking').label, '自动复查中');
+  assert.equal(render({status:'verification_required'}, 'waiting').label, '待 Google 核验');
+  assert.equal(render({status:'authorization_required'}, 'waiting').automaticQuotaRecovery, undefined);
+  assert.equal(render(null, null, false).label, '可调用');
+});
+
 test('usage bars preserve zero, exact usage, and unknown values', () => {
   const context = vm.createContext({Intl});
   load('esc', context);
@@ -282,22 +361,55 @@ test('usage bars preserve zero, exact usage, and unknown values', () => {
   }
 });
 
-test('Flow refresh cooldown belongs to the account that was already rechecked', async () => {
-  const first = {profile:'first', flow_login:'verified'};
-  const second = {profile:'second', flow_login:'verified'};
+test('Flow waits for the background repair even if another pass owns the repair lock', async () => {
+  const initial = {accounts:{first:'binding',second:'project'},recovery:{first:'failed',second:'pending'}};
+  let calls = 0;
   const context = vm.createContext({
-    state:{snapshotFresh:true,snapshot:{real_accounts:{items:[first,second]}}},
-    flowReadinessObservation:{}, rememberFlowReadiness:()=>{},
-    autoFlowRecovery:null, autoFlowRecoveryProfiles:new Set(),
-    autoFlowRecoveryAfter:new Map([['first',Date.now()+300000]]),
-    postJson:async () => ({accounts:{first:'overlay',second:'ok'}}),
+    state:{snapshotFresh:true}, initial, autoFlowRecovery:null,
+    flowReadinessObservation:{pageChecks:initial,dispatch:{available:true}},
+    rememberFlowReadiness:()=>assert.fail('a busy repair worker has not supplied an outcome'),
+    postJson:async () => {
+      calls++;
+      throw Object.assign(new Error('repair in progress'), {status:409});
+    },
   });
   load('autoRecoverFlowPages',context);
-  vm.runInContext("autoRecoverFlowPages({accounts:{first:'overlay',second:'overlay'}})",context);
-  assert.deepEqual(Array.from(context.autoFlowRecoveryProfiles), ['second']);
+  vm.runInContext('autoRecoverFlowPages(initial); autoRecoverFlowPages(initial);',context);
   await context.autoFlowRecovery;
-  vm.runInContext("autoRecoverFlowPages({accounts:{first:'login',second:'verification_required'}})",context);
+  assert.equal(calls,1);
+  assert.equal(context.flowReadinessObservation.pageChecks.recovery.second,'pending');
+  vm.runInContext("autoRecoverFlowPages({recovery:{first:'failed',second:'waiting'}})",context);
   assert.equal(context.autoFlowRecovery,null);
+});
+
+test('Flow card waits through local recovery, reports exhaustion, and clears a stale warning on success', () => {
+  const account = {profile:'a', flow_login:'verified', flow_health:'ready', flow_balance:1000,
+    flow_balance_fresh:true, flow_risk_known:true, flow_pacing_known:true};
+  const snapshot = {checked_at:10, flow_state:{available:true}, real_accounts:{available:true,items:[account]},
+    flow_coordination:{desktop_keyboard_ready:true,windows:[],window_lifecycle:[],window_bindings:[]}};
+  const checks = {accounts:{a:'binding'}, recovery:{a:'pending'}};
+  const context = vm.createContext({account,snapshot,checks,flowReadinessObservation:null,flowWindowIssue:()=>null});
+  for (const name of ['flowLoginNotice','accountIssues','flowGovernance','auditFlowAccounts','flowAccountReason','flowOccupiedSlots']) load(name,context);
+  const row = () => vm.runInContext('auditFlowAccounts(snapshot,{available:true,active:0,maximum:1},checks,11)[0]',context);
+  const reason = () => {
+    context.row = row();
+    return vm.runInContext('flowAccountReason(account,snapshot,row,row.page)',context);
+  };
+  assert.equal(row().status,'checking');
+  assert.equal(row().issues.length,0);
+  assert.equal(reason().label,'自动恢复中');
+  checks.accounts.a = 'flow_landing';
+  assert.equal(reason().label,'自动恢复中');
+  checks.accounts.a = 'verification_required';
+  assert.equal(reason().label,'需要用户登录');
+  checks.accounts.a = 'binding';
+  checks.recovery.a = 'failed';
+  assert.equal(row().status,'blocked');
+  assert.match(reason().text,/3 次.*一键就绪/);
+  checks.accounts.a = 'ok';
+  checks.recovery = {};
+  assert.equal(row().status,'ready');
+  assert.equal(reason(),null);
 });
 
 test('compact Gemini quota keeps recovery dates in hover details', () => {
@@ -552,7 +664,7 @@ test('account cards render fallback states without aborting the account list', (
   for (const status of ['ready', 'blocked', 'unknown', 'checking']) {
     const context = vm.createContext({
       item: {profile:'test', key:'flow-account-test', gemini:'verified'}, state:{snapshot:{}},
-      flow:true,
+      flow:true, signIn:null,
       channelReadFailed:false, officialQuotaData:null, officialQuotaReadFailed:false, flowReadinessObservation:null,
       flowRow:{status,issues:[]}, geminiRow:{status}, issues:[],
       flowWindowIssue: () => null, readinessBadge: row => row.status,
@@ -743,7 +855,7 @@ test('an idle Flow draft is shown as a refreshable state with the result of a co
   load('flowAccountReason', context);
   const reasonFor = (row) => vm.runInContext(
     `flowAccountReason({profile:'a'},{tasks:[]},${JSON.stringify(row)},'draft')`, context);
-  assert.equal(reasonFor({recovering:true}).label, '刷新复查中');
+  assert.equal(reasonFor({recovering:true}).label, '自动恢复中');
   assert.match(reasonFor({status:'blocked'}).text, /空闲时会自动刷新/);
   assert.match(reasonFor({status:'blocked',draftResetAttempted:true}).text, /刷新后仍有/);
 });
