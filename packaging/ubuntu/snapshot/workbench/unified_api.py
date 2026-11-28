@@ -1,5 +1,6 @@
 """Authenticated loopback-only API for the existing creative workbench."""
 import argparse
+import hashlib
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -11,6 +12,7 @@ from urllib.parse import urlsplit
 
 from unified_keys import UnifiedKeys
 from flow_references import MAX_BYTES as FLOW_REFERENCE_LIMIT, UPLOAD_ROUTE as FLOW_REFERENCE_UPLOAD
+from native_video_review import NativeVideoReviews, RequestError, matches as native_video_route
 
 
 LIBRARY_IMPORT_PATH = '/api/library/import'
@@ -26,6 +28,8 @@ def allowed_route(method, target):
         return None
     if len(target) > 3500:
         return None
+    if native_video_route(method, path):
+        return 'native-video'
     if method == 'GET':
         if re.fullmatch(r'/api/music/jobs/[0-9a-f-]{36}', path):
             return 'workbench'
@@ -54,7 +58,7 @@ def allowed_route(method, target):
     return None
 
 
-def handler_for(store, upstream_port=18920, flow_port=18888):
+def handler_for(store, upstream_port=18920, flow_port=18888, *, native_reviews=None):
     class Handler(BaseHTTPRequestHandler):
         server_version = 'StudioWrightAPI/1'
 
@@ -62,7 +66,10 @@ def handler_for(store, upstream_port=18920, flow_port=18888):
             pass  # Never log keys, prompts, URLs, or request data.
 
         def error_json(self, status, message):
-            body = json.dumps({'error': message}, ensure_ascii=False).encode('utf-8')
+            self.send_json(status, {'error': message})
+
+        def send_json(self, status, data):
+            body = json.dumps(data, ensure_ascii=True).encode('utf-8')
             self.send_response(status)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(body)))
@@ -94,6 +101,23 @@ def handler_for(store, upstream_port=18920, flow_port=18888):
             route = allowed_route(self.command, self.path)
             if not route:
                 return self.error_json(404, '接口不存在。')
+            if route == 'native-video':
+                self.close_connection = True
+                if native_reviews is None:
+                    return self.error_json(404, '接口不存在。')
+                self.connection.settimeout(90)
+                try:
+                    owner = hashlib.sha256(header[7:].encode('ascii')).hexdigest()
+                    status, data = native_reviews.handle(self, owner)
+                except RequestError as exc:
+                    status, data = exc.status, {'error': exc.code}
+                except (OSError, sqlite3.Error):
+                    status, data = 503, {'error': 'review_state_unavailable'}
+                try:
+                    self.send_json(status, data)
+                except OSError:
+                    pass  # The original receipt remains queryable after a dropped connection.
+                return
             library_import = self.command == 'POST' and urlsplit(self.path).path == LIBRARY_IMPORT_PATH
             flow_reference = FLOW_REFERENCE_UPLOAD.fullmatch(self.path) is not None
             is_upload = library_import or flow_reference or self.path.startswith('/api/real-pool/uploads/')
@@ -178,7 +202,10 @@ def main():
     parser.add_argument('--state-dir', type=Path, default=Path.home()/'.local/state/creative-unified-workbench')
     args = parser.parse_args()
     os.umask(0o077)
-    server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(UnifiedKeys(args.state_dir/'api-keys.sqlite3'), args.upstream_port, args.flow_port))
+    native_reviews = NativeVideoReviews(args.state_dir/'native-video-reviews')
+    server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(
+        UnifiedKeys(args.state_dir/'api-keys.sqlite3'), args.upstream_port, args.flow_port,
+        native_reviews=native_reviews))
     server.serve_forever()
 
 

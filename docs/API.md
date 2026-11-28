@@ -16,6 +16,8 @@
 
 健康检查和快照都不提交生成任务。
 
+原始带声视频审核使用单独的 [原生 MP4 审核入口](NATIVE-MP4-REVIEW.md)，沿用同一密钥。先查询 `GET /api/native-video/capabilities` 确认可用性。
+
 **常见 HTTP 状态**
 
 | 状态 | 含义 | 处理方式 |
