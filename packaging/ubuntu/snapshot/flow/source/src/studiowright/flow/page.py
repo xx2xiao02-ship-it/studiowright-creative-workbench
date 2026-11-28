@@ -68,6 +68,21 @@ class FlowError(RuntimeError):
 class UnusualActivity(FlowError):
     """Flow refused with an unusual-activity error; the profile must cool down."""
 
+    def __init__(
+        self, message: str, *, reply: be.RpcError | None = None, http_status: int | None = None
+    ) -> None:
+        super().__init__(message)
+        self.reply_diagnostics = None
+        if reply is not None:
+            known_reasons = ("PUBLIC_ERROR_UNUSUAL_ACTIVITY", "PUBLIC_ERROR_UNUSUAL_ACTIVITY_TOO_MUCH_TRAFFIC")
+            reason = next((reason for reason in reply.reasons if reason in known_reasons), UNUSUAL)
+            self.reply_diagnostics = {
+                "http_status": http_status,
+                "flow_code": reply.code,
+                "reason": reason,
+                "observed_at": time.time(),
+            }
+
 
 class SubmissionRejectedUnusual(UnusualActivity):
     """A generation submit was explicitly rejected before any accepted item was observed."""
@@ -361,9 +376,9 @@ class ReplyWatch:
         return True
 
 
-def _raise_for_refusal(exc: be.RpcError) -> None:
+def _raise_for_refusal(exc: be.RpcError, http_status: int) -> None:
     if any(UNUSUAL in reason for reason in exc.reasons):
-        raise UnusualActivity(str(exc)) from exc
+        raise UnusualActivity(str(exc), reply=exc, http_status=http_status) from exc
     raise GenerationRefused(str(exc)) from exc
 
 
@@ -742,11 +757,11 @@ class FlowPage:
                     dialog_handled = True
                 await watch.wait(1.0)
         results: list[replies.UploadResult] = []
-        for _rpc_id, _status, text in watch.bodies:
+        for _rpc_id, status, text in watch.bodies:
             try:
                 results.append(replies.upload_result(be.parse_reply(text, UPLOAD_RPC)))
             except be.RpcError as exc:
-                _raise_for_refusal(exc)
+                _raise_for_refusal(exc, status)
         if len(results) < len(files):
             raise PartialUpload(f"only {len(results)} of {len(files)} uploads finished", results)
         await self._wait_for_tiles([r.media_id for r in results])
@@ -906,7 +921,9 @@ class FlowPage:
     async def _type_and_submit(
         self, prompt: str, on_submit: Callable[[], None] | None = None
     ) -> None:
-        if self._foreground_lease and self._foreground_lease.active:
+        lease = self._foreground_lease
+        reserved = bool(lease and lease.active)
+        if reserved:
             await self.dismiss_flow_changelog()
         # Opt in explicitly; without this local marker the original path is unchanged.
         from pathlib import Path
@@ -928,6 +945,8 @@ class FlowPage:
             # do not submit anything. A lost reply after this point is not a failure.
             if on_submit is not None:
                 on_submit()
+            if reserved:
+                lease.mark_submit_click()
             await submit.click()
             return
         # This function runs only inside the existing account/profile lock.
@@ -943,16 +962,16 @@ class FlowPage:
         from provider_paste_hooks import flow_submit
         from wayland_desktop_driver import WaylandDesktopDriver
         queue = ForegroundQueue(Path.home() / '.local/state/creative-unified-workbench/foreground-input')
-        reserved = bool(self._foreground_lease and self._foreground_lease.active)
         target = self._foreground_target if reserved else await find_flow_target(self.session, self.page, call)
         composer = self.page.locator(s.COMPOSER).first
         await flow_submit(page=self.page, composer=composer,
             submit_button=self.page.locator(s.SUBMIT).first,
             credits_warning=self.page.locator(s.CREDITS_WARNING),
             target=target, prompt=prompt, queue=queue,
-            driver=WaylandDesktopDriver(gui_env()), on_submit=on_submit, reserved=reserved)
+            driver=WaylandDesktopDriver(gui_env()), on_submit=on_submit, reserved=reserved,
+            on_click=lease.mark_submit_click if reserved else None)
         if reserved:
-            await self._foreground_lease.release()
+            await lease.release()
 
     async def generate_images(
         self, prompt: str, count: int = 1, timeout_s: float | None = None,
@@ -987,8 +1006,8 @@ class FlowPage:
             except be.RpcError as exc:
                 verified = getattr(watch, 'verified_submit', lambda *_: False)
                 if count == 1 and verified(0, IMAGE_RPC) and any(UNUSUAL in reason for reason in exc.reasons):
-                    raise SubmissionRejectedUnusual(str(exc)) from exc
-                _raise_for_refusal(exc)
+                    raise SubmissionRejectedUnusual(str(exc), reply=exc, http_status=status) from exc
+                _raise_for_refusal(exc, status)
                 raise
             except be.MissingReply as exc:
                 raise FlowError(f"unreadable image reply (HTTP {status})") from exc
@@ -1090,8 +1109,8 @@ class FlowPage:
                             if any(UNUSUAL in reason for reason in exc.reasons):
                                 verified = getattr(watch, 'verified_submit', lambda *_: False)
                                 if rpc_id in VIDEO_SUBMIT_RPCS and not new_ids and verified(seen - 1, rpc_id):
-                                    raise SubmissionRejectedUnusual(str(exc)) from exc
-                                raise UnusualActivity(str(exc)) from exc
+                                    raise SubmissionRejectedUnusual(str(exc), reply=exc, http_status=http_status) from exc
+                                raise UnusualActivity(str(exc), reply=exc, http_status=http_status) from exc
                             if rpc_id in VIDEO_SUBMIT_RPCS:
                                 raise GenerationRefused(str(exc)) from exc
                         continue

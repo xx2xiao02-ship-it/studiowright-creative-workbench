@@ -9,12 +9,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import random
 import time
 from dataclasses import dataclass
 
 from studiowright.store import GENERATION_COOLDOWN_SECONDS, Store
+
+ERROR_7_COOLDOWN_SECONDS = 15 * 60
+log = logging.getLogger(__name__)
 
 
 def env_seconds(name: str, default: float) -> float:
@@ -146,30 +150,52 @@ class Governor:
             self._assert_allowed(db, time.time())
         return delay
 
-    def report_unusual_activity(self, now: float | None = None) -> float:
+    def report_unusual_activity(self, now: float | None = None, *, error_code: int | None = None) -> float:
         now = time.time() if now is None else now
         is_generation = ':' not in self.profile
-        until = now + GENERATION_COOLDOWN_SECONDS
+        is_error_7 = is_generation and error_code == 7
+        until = now + (ERROR_7_COOLDOWN_SECONDS if is_error_7 else GENERATION_COOLDOWN_SECONDS)
+        pause_after_error_7 = False
         with self.store.transaction() as db:
             if not is_generation:
                 row = db.execute("SELECT refusals FROM pacing WHERE profile = ?", (self.profile,)).fetchone()
                 prior_refusals = row["refusals"] if row else 0
                 until = now + self.settings.cooldown_s * (1 + min(prior_refusals, 3))
-            db.execute(
+            until = db.execute(
                 "INSERT INTO pacing (profile, cooldown_until, refusals) VALUES (?, ?, 1) "
                 "ON CONFLICT (profile) DO UPDATE SET cooldown_until = MAX(cooldown_until, excluded.cooldown_until), "
-                "refusals = refusals + 1",
+                "refusals = refusals + 1 RETURNING cooldown_until",
                 (self.profile, until),
-            )
+            ).fetchone()["cooldown_until"]
             if is_generation:
+                if is_error_7:
+                    risk = db.execute("SELECT consecutive, paused FROM flow_risk WHERE profile=?",
+                                      (self.profile,)).fetchone()
+                    if risk and risk["consecutive"] and not risk["paused"]:
+                        previous = db.execute(
+                            "SELECT action FROM flow_risk_events WHERE profile=? "
+                            "AND action IN ('unusual', 'unusual_error_7') ORDER BY id DESC LIMIT 1",
+                            (self.profile,),
+                        ).fetchone()
+                        pause_after_error_7 = bool(previous and previous["action"] == "unusual_error_7")
                 db.execute(
-                    "INSERT INTO flow_risk(profile,consecutive,paused,last_unusual) VALUES(?,1,0,?) "
+                    "INSERT INTO flow_risk(profile,consecutive,paused,last_unusual) VALUES(:profile,1,0,:now) "
                     "ON CONFLICT(profile) DO UPDATE SET consecutive=consecutive+1, "
-                    "paused=CASE WHEN consecutive+1>=3 THEN 1 ELSE paused END, "
-                    "paused_at=CASE WHEN consecutive+1>=3 AND paused=0 THEN excluded.last_unusual ELSE paused_at END, "
-                    "last_unusual=MAX(COALESCE(last_unusual,0),excluded.last_unusual)", (self.profile, now),
+                    "paused=CASE WHEN :pause_after_error_7 OR consecutive+1>=3 THEN 1 ELSE paused END, "
+                    "paused_at=CASE WHEN (:pause_after_error_7 OR consecutive+1>=3) AND paused=0 "
+                    "THEN excluded.last_unusual ELSE paused_at END, "
+                    "last_unusual=MAX(COALESCE(last_unusual,0),excluded.last_unusual)",
+                    {"profile": self.profile, "now": now, "pause_after_error_7": pause_after_error_7},
                 )
-                db.execute("INSERT INTO flow_risk_events(profile,action,created) VALUES(?,'unusual',?)", (self.profile, now))
+                actions = ["unusual"]
+                if is_error_7:
+                    actions.append("unusual_error_7")
+                if pause_after_error_7:
+                    actions.append("paused_after_error_7")
+                db.executemany("INSERT INTO flow_risk_events(profile,action,created) VALUES(?,?,?)",
+                               [(self.profile, action, now) for action in actions])
+        if pause_after_error_7:
+            log.warning("Flow account %s paused after two consecutive error 7 refusals", self.profile)
         # Governance: a cooling account goes fully silent. Close its managed
         # browser; the readiness/activation path reopens it on demand afterwards.
         if is_generation:
