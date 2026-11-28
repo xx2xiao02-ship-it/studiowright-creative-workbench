@@ -17,7 +17,7 @@ BASE = '/api/native-video'
 CAPABILITIES = BASE + '/capabilities'
 REVIEW = re.compile(BASE + r'/reviews/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})(/media)?')
 MODEL = 'gemini-3.8-flash'
-PROVIDER_MODEL = re.compile(r'gemini-3\.8-flash(?:-(?:low|medium|high))?')
+VERTEX_TRANSPORT = 'vertex-generate-content-inline-mp4'
 SHA256 = re.compile(r'[0-9a-f]{64}')
 MAX_VIDEO = 100 * 1024 * 1024
 MAX_JSON = 256 * 1024
@@ -99,11 +99,13 @@ class NativeVideoReviews:
     def receipt(self, row):
         status = row['status']
         outcome = json.loads(row['outcome']) if row['outcome'] else {}
+        media = {'sha256': row['sha256'], 'bytes': row['size'], 'mime_type': 'video/mp4', 'audio_present': True}
         if status == 'running' and row['worker'] != self.instance:
             status, outcome = 'unknown', {'error': 'worker_interrupted'}
+        if status == 'completed':
+            status, outcome = checked_outcome({**outcome, 'status': status}, media)
         return {'request_id': row['id'], 'status': status, 'requested_model': MODEL,
-                'actual_model': None, 'media': {'sha256': row['sha256'], 'bytes': row['size'],
-                'mime_type': 'video/mp4', 'audio_present': True}, **outcome}
+                'actual_model': None, 'media': media, **outcome}
 
     def get(self, request_id, owner):
         with closing(self.connect()) as db:
@@ -264,17 +266,31 @@ def checked_outcome(result, media):
     info = {'provider_model': provider_model} if isinstance(provider_model, str) and re.fullmatch(
         r'[A-Za-z0-9_./-]{1,120}', provider_model) else {}
     if status != 'completed':
-        return status, {**info, 'error': 'provider_' + status}
-    if not PROVIDER_MODEL.fullmatch(info.get('provider_model', '')):
+        http_status = result.get('http_status')
+        if type(http_status) is int and 300 <= http_status <= 599:
+            info['provider_http_status'] = http_status
+        error = result.get('error')
+        if not isinstance(error, str) or not re.fullmatch(r'provider_[a-z_]{1,60}', error):
+            error = 'provider_' + status
+        return status, {**info, 'error': error}
+    if provider_model != MODEL:
         return 'failed', {**info, 'error': 'actual_model_unverified_or_mismatched'}
     input_media = result.get('input_media')
     if (input_media != media or input_media.get('audio_present') is not True
-            or type(input_media.get('bytes')) is not int or any(not isinstance(result.get(field), str)
-            or not re.fullmatch(r'[A-Za-z0-9_.:/-]{1,200}', result[field])
-            for field in ('response_id', 'account_ref')) or not isinstance(result.get('review'), dict) or not result['review']):
+            or type(input_media.get('bytes')) is not int or not isinstance(result.get('response_id'), str)
+            or not re.fullmatch(r'[A-Za-z0-9_.:/-]{1,200}', result['response_id'])
+            or not isinstance(result.get('account_ref'), str)
+            or not re.fullmatch(r'google-adc/sha256-[0-9a-f]{64}', result['account_ref'])
+            or not isinstance(result.get('review'), dict) or not result['review']):
         return 'failed', {**info, 'error': 'provider_evidence_incomplete'}
+    evidence = result.get('provider_evidence')
+    if (not isinstance(evidence, dict) or evidence.get('transport') != VERTEX_TRANSPORT
+            or type(evidence.get('http_status')) is not int or evidence['http_status'] != 200
+            or not isinstance(evidence.get('response_sha256'), str)
+            or not SHA256.fullmatch(evidence['response_sha256'])):
+        return 'failed', {**info, 'error': 'provider_transport_unverified'}
     outcome = {**info, 'actual_model': MODEL, **{field: result[field]
-        for field in ('input_media', 'response_id', 'account_ref', 'review')}}
+        for field in ('input_media', 'response_id', 'account_ref', 'review', 'provider_evidence')}}
     try:
         if len(json.dumps(outcome, allow_nan=False).encode()) <= MAX_JSON:
             return 'completed', outcome

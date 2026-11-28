@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from unified_keys import UnifiedKeys
 from flow_references import MAX_BYTES as FLOW_REFERENCE_LIMIT, UPLOAD_ROUTE as FLOW_REFERENCE_UPLOAD
 from native_video_review import NativeVideoReviews, RequestError, matches as native_video_route
+from native_video_vertex import configured_adapter
 
 
 LIBRARY_IMPORT_PATH = '/api/library/import'
@@ -202,7 +203,7 @@ def main():
     parser.add_argument('--state-dir', type=Path, default=Path.home()/'.local/state/creative-unified-workbench')
     args = parser.parse_args()
     os.umask(0o077)
-    native_reviews = NativeVideoReviews(args.state_dir/'native-video-reviews')
+    native_reviews = NativeVideoReviews(args.state_dir/'native-video-reviews', configured_adapter())
     server = ThreadingHTTPServer(('127.0.0.1', args.port), handler_for(
         UnifiedKeys(args.state_dir/'api-keys.sqlite3'), args.upstream_port, args.flow_port,
         native_reviews=native_reviews))
