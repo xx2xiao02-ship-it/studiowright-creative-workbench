@@ -280,7 +280,7 @@ function flowAccountReason(account, snapshot, row, pageState, activity) {
     });
     return {label:'Flow 派发自检未通过', text:[...new Set(reasons)].join('；'), noScreenshot:true};
   }
-  if (row?.recovering && !activity) return {label:'自动恢复中',text:'工作台正在重新连接或刷新原项目页，你暂时不需要操作。',
+  if (row?.recovering && !activity) return {label:'自动恢复中',text:'正在重新连接或刷新原项目页，你暂时不需要操作。',
     showOnCard:true,noScreenshot:true};
   if (row?.recoveryFailed && !activity) return {label:'自动恢复未通过',
     text:'已尝试 3 次。请在这个账号的 Ubuntu 浏览器打开原 Flow 项目，再点「Flow 一键就绪」。',

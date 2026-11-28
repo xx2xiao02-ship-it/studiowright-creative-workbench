@@ -621,7 +621,7 @@ print(call("/api/real-pool/flow", payload, rid))</code></pre>
               <h3>带参考素材</h3>
               <div class="api-endpoint"><b class="api-method-post">POST</b><code>/api/real-pool/flow-references/auto/{素材 UUID}/{扩展名}</code><span>逐个上传文件原始字节，返回 reference_id。上传、校验和提交使用同一个 Idempotency-Key，不填账号或项目。</span></div>
               <div class="api-table-wrap"><table class="api-table"><thead><tr><th scope="col">模式</th><th scope="col">在 params 中添加</th></tr></thead><tbody><tr><td>图生图</td><td><code>mode: "image-to-image"</code> 和 <code>reference_ids</code>（图片编号数组）</td></tr><tr><td>Omni 首帧或首尾帧</td><td><code>mode: "frames"</code>、<code>start_reference_id</code>，可选 <code>end_reference_id</code>（图片编号）</td></tr><tr><td>Omni 混合参考</td><td><code>model: "omni-flash-1.1"</code>、<code>mode: "ingredients"</code> 和 <code>reference_ids</code>（图片、MP4 编号数组）</td></tr></tbody></table></div>
-              <p>参考文件支持 JPG、PNG、WebP 和上述模式允许的 MP4，不接收独立音频。单文件最多 8 MiB、合计 64 MiB，编号 24 小时有效。单图或单视频由平台统一启用换号重试，最多换 3 个账号；重试行为不受调用方控制。图片只在确认未发送时重试；视频重试沿用原任务的时长与清晰度。结果不明不重发。查询和下载始终用原任务编号。只校验时发送 <code>POST /api/real-pool/flow-validate</code> 并设 <code>confirm: false</code>，返回 <code>valid</code>、<code>submitted: false</code> 和 <code>reference_count</code>。</p>
+              <p>参考文件支持 JPG、PNG、WebP 和上述模式允许的 MP4，不接收独立音频。单文件最多 8 MiB、合计 64 MiB，编号 24 小时有效。单图或单视频符合条件时默认最多自动换号重试 3 次。在请求顶层传 <code>"auto_retry": false</code> 可关闭。Flow 返回已确认的异常活动错误码 7 或结果不明时，停止自动重试。视频重试沿用原任务的时长和清晰度。查询和下载始终用原任务编号。只校验时发送 <code>POST /api/real-pool/flow-validate</code> 并设 <code>confirm: false</code>，返回 <code>valid</code>、<code>submitted: false</code> 和 <code>reference_count</code>。</p>
               <div class="api-code-head"><span>复制参考素材请求 · 默认只校验</span><button type="button" data-copy-code="api-code-flow-references">复制代码</button></div><pre class="api-code" tabindex="0"><code id="api-code-flow-references">rid = str(uuid4())
 print("请求编号:", rid, flush=True)
 file = Path("首帧.png")
@@ -701,7 +701,7 @@ if record.get("task_id"):
                         output.write(chunk)</code></pre>
               <p>已入库素材：<code>GET /api/library?page=1&amp;limit=24</code> 查列表，<code>GET /api/library/{素材ID}</code> 查详情，<code>GET /api/library/{素材ID}/file</code> 下载原文件。</p>
               <h3>现成素材查重入库</h3>
-              <div class="api-endpoint"><b>POST</b><code>/api/library/import?filename=原文件名&amp;sha256=校验值</code><span>使用工作台密钥，正文传原始文件，每次一个，最大 1 GiB。</span></div>
+              <div class="api-endpoint"><b>POST</b><code>/api/library/import?filename=原文件名&amp;sha256=校验值</code><span>使用算力中心密钥，正文传原始文件，每次一个，最大 1 GiB。</span></div>
               <p>图片、视频及 WAV／M4A 可入库。素材编号是文件内容的 SHA-256，可先用素材详情接口查重。上传返回 <code>asset_id</code> 和下载路径。重复内容返回原编号并标记 <code>deduplicated: true</code>。</p>
               <p>错误通常返回 <code>{"error":"原因"}</code>。<code>401</code> 检查密钥，<code>400</code> 检查请求参数，<code>404</code> 核对路径或编号，<code>409</code> 先查询原任务。<code>GET /health</code> 检查 18922 API 是否可访问，无需密钥。</p>
             </section>
